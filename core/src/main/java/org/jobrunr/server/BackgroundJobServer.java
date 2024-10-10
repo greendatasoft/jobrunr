@@ -43,21 +43,21 @@ public class BackgroundJobServer implements BackgroundJobServerMBean {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(BackgroundJobServer.class);
 
-    private final UUID backgroundJobServerId;
-    private final BackgroundJobServerConfiguration configuration;
-    private final StorageProvider storageProvider;
-    private final DashboardNotificationManager dashboardNotificationManager;
-    private final JsonMapper jsonMapper;
-    private final List<BackgroundJobRunner> backgroundJobRunners;
-    private final JobDefaultFilters jobDefaultFilters;
-    private final JobServerStats jobServerStats;
-    private final WorkDistributionStrategy workDistributionStrategy;
-    private final ServerZooKeeper serverZooKeeper;
-    private final JobZooKeeper jobZooKeeper;
-    private final BackgroundJobServerLifecycleLock lifecycleLock;
-    private final BackgroundJobPerformerFactory backgroundJobPerformerFactory;
-    private volatile Instant firstHeartbeat;
-    private volatile boolean isRunning;
+    protected final UUID backgroundJobServerId;
+    protected final BackgroundJobServerConfiguration configuration;
+    protected final StorageProvider storageProvider;
+    protected final DashboardNotificationManager dashboardNotificationManager;
+    protected final JsonMapper jsonMapper;
+    protected final List<BackgroundJobRunner> backgroundJobRunners;
+    protected final JobDefaultFilters jobDefaultFilters;
+    protected final JobServerStats jobServerStats;
+    protected final WorkDistributionStrategy workDistributionStrategy;
+    protected final ServerZooKeeper serverZooKeeper;
+    protected final JobZooKeeper jobZooKeeper;
+    protected final BackgroundJobServerLifecycleLock lifecycleLock;
+    protected final BackgroundJobPerformerFactory backgroundJobPerformerFactory;
+    protected volatile Instant firstHeartbeat;
+    protected volatile boolean isRunning;
     private volatile Boolean isMaster;
     private volatile ScheduledThreadPoolExecutor zookeeperThreadPool;
     private JobRunrExecutor jobExecutor;
@@ -251,7 +251,7 @@ public class BackgroundJobServer implements BackgroundJobServerMBean {
     }
 
     private void startZooKeepers() {
-        zookeeperThreadPool = new ScheduledThreadPoolJobRunrExecutor(2, "backgroundjob-zookeeper-pool");
+        zookeeperThreadPool = getZookeeperThreadPool();
         // why fixedDelay: in case of long stop-the-world garbage collections, the zookeeper tasks will queue up
         // and all will be launched one after another
         zookeeperThreadPool.scheduleWithFixedDelay(serverZooKeeper, 0, configuration.pollIntervalInSeconds, TimeUnit.SECONDS);
@@ -339,7 +339,11 @@ public class BackgroundJobServer implements BackgroundJobServerMBean {
                 .orElse(new ScheduledThreadPoolJobRunrExecutor(workDistributionStrategy.getWorkerCount(), "backgroundjob-worker-pool"));
     }
 
-    private static class BackgroundJobServerLifecycleLock implements AutoCloseable {
+    protected ScheduledThreadPoolExecutor getZookeeperThreadPool() {
+        return new ScheduledThreadPoolJobRunrExecutor(2, "backgroundjob-zookeeper-pool");
+    }
+
+    protected static class BackgroundJobServerLifecycleLock implements AutoCloseable {
         private final ReentrantLock reentrantLock = new ReentrantLock();
 
         public BackgroundJobServerLifecycleLock lock() {
@@ -355,7 +359,7 @@ public class BackgroundJobServer implements BackgroundJobServerMBean {
         }
     }
 
-    private static class BasicBackgroundJobPerformerFactory implements BackgroundJobPerformerFactory {
+    protected static class BasicBackgroundJobPerformerFactory implements BackgroundJobPerformerFactory {
         @Override
         public int getPriority() {
             return 10;

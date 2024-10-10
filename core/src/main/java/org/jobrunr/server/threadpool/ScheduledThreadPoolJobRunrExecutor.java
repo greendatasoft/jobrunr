@@ -3,7 +3,10 @@ package org.jobrunr.server.threadpool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 
@@ -39,6 +42,26 @@ public class ScheduledThreadPoolJobRunrExecutor extends java.util.concurrent.Sch
             shutdownNow();
             Thread.currentThread().interrupt();
         }
+    }
+
+    @Override
+    protected void afterExecute(Runnable r, Throwable t) {
+        super.afterExecute(r, t);
+        if (t == null && r instanceof Future<?> && ((Future<?>)r).isDone()) {
+            try {
+                Object result = ((Future<?>) r).get();
+            } catch (CancellationException ce) {
+                t = ce;
+            } catch (ExecutionException ee) {
+                t = ee.getCause();
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+            }
+        }
+        if (t != null) {
+            LOGGER.error(t.getMessage(), t);
+        }
+
     }
 
     private static class NamedThreadFactory implements ThreadFactory {
