@@ -4,7 +4,7 @@ plugins {
     id 'java-library'
     id 'java-test-fixtures'
     id 'maven-publish'
-    id 'signing'
+//    id 'signing'
 }
 
 sourceSets {
@@ -163,12 +163,23 @@ publishing {
             }
         }
     }
-}
-
-signing {
-    String base64Key = System.getenv('SIGNING_KEY')
-    if (base64Key) {
-        useInMemoryPgpKeys(new String(Base64.decoder.decode(base64Key)), System.getenv('SIGNING_PASSWORD'))
-        sign publishing.publications.mavenJava
+    repositories {
+        maven {
+            var releasesUrl = "$GREENDATA_PUBLIC_REPO_URL"
+            var snapshotsUrl = "$GREENDATA_INTERNAL_REPO_URL"
+            url = (version.toString().endsWith("SNAPSHOT")) ? snapshotsUrl : releasesUrl
+            credentials {
+                username "$MAVEN_REPO_USER"
+                password "$MAVEN_REPO_PASS"
+            }
+        }
     }
 }
+
+//signing {
+//    String base64Key = System.getenv('SIGNING_KEY')
+//    if (base64Key) {
+//        useInMemoryPgpKeys(new String(Base64.decoder.decode(base64Key)), System.getenv('SIGNING_PASSWORD'))
+//        sign publishing.publications.mavenJava
+//    }
+//}

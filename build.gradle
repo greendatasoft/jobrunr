@@ -5,16 +5,9 @@ plugins {
     id 'signing'
 }
 
-nexusPublishing {
-    packageGroup = "org.jobrunr"
-    repositories {
-        sonatype()
-    }
-}
-
 subprojects {
     group = 'org.jobrunr'
-    version = "v1.0.0-LOWCODE-PROJECTS-SNAPSHOT".replace("v", "")
+    version = "v1.0.0-SNAPSHOT".replace("v", "")
 }
 
 def isNonStable = { String version ->
