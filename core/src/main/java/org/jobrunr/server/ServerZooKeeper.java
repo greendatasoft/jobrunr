@@ -49,9 +49,8 @@ public class ServerZooKeeper implements Runnable {
                 signalBackgroundJobServerAliveAndDoZooKeeping();
             }
         } catch (Exception shouldNotHappen) {
-            LOGGER.error("An unrecoverable error occurred. Shutting server down...", shouldNotHappen);
-            if (masterId == null) backgroundJobServer.setIsMaster(null);
-            new Thread(this::stopServer).start();
+            LOGGER.error("An unrecoverable error occurred. ", shouldNotHappen);
+            new Thread(this::resetServer).start();
         }
     }
 
@@ -78,13 +77,8 @@ public class ServerZooKeeper implements Runnable {
             deleteServersThatTimedOut();
             determineIfCurrentBackgroundJobServerIsMaster();
         } catch (ServerTimedOutException e) {
-            if (restartAttempts.getAndIncrement() < 3) {
-                LOGGER.error("SEVERE ERROR - Server timed out while it's still alive. Are all servers using NTP and in the same timezone? Are you having long GC cycles? Restart attempt {} out of 3", restartAttempts);
-                new Thread(this::resetServer).start();
-            } else {
-                LOGGER.error("FATAL - Server restarted 3 times but still times out by other servers. Shutting down.");
-                new Thread(this::stopServer).start();
-            }
+            LOGGER.error("SEVERE ERROR - Server timed out while it's still alive. Are all servers using NTP and in the same timezone? Are you having long GC cycles? Restart attempt {}", restartAttempts.incrementAndGet());
+            new Thread(this::resetServer).start();
         }
     }
 
@@ -126,8 +120,12 @@ public class ServerZooKeeper implements Runnable {
     }
 
     private void resetServer() {
+        LOGGER.info("Resetting BackgroundJobServer");
+
         backgroundJobServer.stop();
         backgroundJobServer.start();
+
+        LOGGER.info("BackgroundJobServer has been reset");
     }
 
     private void stopServer() {
