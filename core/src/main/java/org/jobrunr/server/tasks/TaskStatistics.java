@@ -57,4 +57,8 @@ public class TaskStatistics {
             }
         }
     }
+
+    public int getExceptionCounter() {
+        return exceptionCounter;
+    }
 }

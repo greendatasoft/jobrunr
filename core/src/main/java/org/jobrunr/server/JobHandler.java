@@ -37,16 +37,8 @@ public abstract class JobHandler implements Runnable {
             runInfo.markRunAsSucceeded();
         } catch (Exception e) {
             taskStatistics.handleException(e);
-            if (taskStatistics.hasTooManyExceptions()) {
-                if (e instanceof StorageException) {
-                    LOGGER.error("FATAL - JobRunr encountered too many storage exceptions. Shutting down. Did you know JobRunr Pro has built-in database fault tolerance? Check out https://www.jobrunr.io/en/documentation/pro/database-fault-tolerance/", e);
-                } else {
-                    LOGGER.error("FATAL - JobRunr encountered too many processing exceptions. Shutting down.", shouldNotHappenException(e));
-                }
-                backgroundJobServer.stop();
-            } else {
-                LOGGER.warn(JobRunrException.SHOULD_NOT_HAPPEN_MESSAGE + " - Processing will continue.", e);
-            }
+            //TODO: Maybe add database fault tolerance
+            LOGGER.warn(JobRunrException.SHOULD_NOT_HAPPEN_MESSAGE + " - Processing will continue. Exception count: " + taskStatistics.getExceptionCounter() + ". Error: ", e);
         }
     }
 

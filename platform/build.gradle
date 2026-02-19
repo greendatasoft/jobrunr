@@ -4,7 +4,7 @@ plugins {
     id 'signing'
 }
 
-version = System.getenv('CI_COMMIT_TAG') ?: "v1.0.0-SNAPSHOT"
+version = "v8.4.2-SNAPSHOT"
 
 dependencies {
     constraints {

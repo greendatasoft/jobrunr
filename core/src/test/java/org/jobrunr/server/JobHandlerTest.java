@@ -3,6 +3,7 @@ package org.jobrunr.server;
 import ch.qos.logback.LoggerAssert;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import org.jobrunr.JobRunrException;
 import org.jobrunr.SevereJobRunrException;
 import org.jobrunr.server.concurrent.UnresolvableConcurrentJobModificationException;
 import org.jobrunr.server.dashboard.DashboardNotificationManager;
@@ -86,8 +87,7 @@ class JobHandlerTest {
             jobHandler.run();
         }
 
-        verify(backgroundJobServer).stop();
-        assertThat(logger).hasErrorMessage("FATAL - JobRunr encountered too many processing exceptions. Shutting down.");
+        verify(backgroundJobServer, Mockito.never()).stop();
     }
 
     @Test
@@ -99,8 +99,8 @@ class JobHandlerTest {
             jobHandler.run();
         }
 
-        verify(backgroundJobServer).stop();
-        assertThat(logger).hasErrorMessage("FATAL - JobRunr encountered too many storage exceptions. Shutting down. Did you know JobRunr Pro has built-in database fault tolerance? Check out https://www.jobrunr.io/en/documentation/pro/database-fault-tolerance/");
+        verify(backgroundJobServer, Mockito.never()).stop();
+//      assertThat(logger).hasErrorMessage("FATAL - JobRunr encountered too many storage exceptions. Shutting down. Did you know JobRunr Pro has built-in database fault tolerance? Check out https://www.jobrunr.io/en/documentation/pro/database-fault-tolerance/");
     }
 
     private Task mockTaskThatThrows(Exception e) {
