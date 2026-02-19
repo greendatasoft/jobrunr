@@ -9,20 +9,27 @@ import org.jobrunr.jobs.filters.JobDefaultFilters;
 import org.jobrunr.jobs.filters.JobFilter;
 import org.jobrunr.jobs.filters.JobFilterUtils;
 import org.jobrunr.jobs.mappers.MDCMapper;
+import org.jobrunr.jobs.states.CarbonAwareAwaitingState;
 import org.jobrunr.jobs.states.ScheduledState;
+import org.jobrunr.scheduling.carbonaware.CarbonAwarePeriod;
 import org.jobrunr.storage.ConcurrentJobModificationException;
 import org.jobrunr.storage.StorageProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.time.Instant;
 import java.time.ZoneId;
+import java.time.temporal.Temporal;
 import java.util.List;
 import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Stream;
 
-import static java.util.Collections.emptyList;
+import static org.jobrunr.jobs.RecurringJob.CreatedBy.API;
+import static org.jobrunr.storage.StorageProvider.BATCH_SIZE;
+import static org.jobrunr.utils.InstantUtils.toInstant;
+import static org.jobrunr.utils.streams.StreamUtils.batchCollector;
 
-public class AbstractJobScheduler {
+public abstract class AbstractJobScheduler {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(AbstractJobScheduler.class);
 
@@ -30,43 +37,57 @@ public class AbstractJobScheduler {
     private final JobFilterUtils jobFilterUtils;
 
     /**
-     * Creates a new AbstractJobScheduler using the provided storageProvider
-     *
-     * @param storageProvider the storageProvider to use
-     */
-    public AbstractJobScheduler(StorageProvider storageProvider) {
-        this(storageProvider, emptyList());
-    }
-
-    /**
-     * Creates a new AbstractJobScheduler using the provided storageProvider and the list of JobFilters that will be used for every background job
+     * Creates a new AbstractJobScheduler using the provided storageProvider and the list of JobFilters
+     * that will be used for every background job
      *
      * @param storageProvider the storageProvider to use
      * @param jobFilters      list of jobFilters that will be used for every job
      */
-    public AbstractJobScheduler(StorageProvider storageProvider, List<JobFilter> jobFilters) {
-        if (storageProvider == null)
+    protected AbstractJobScheduler(StorageProvider storageProvider, List<JobFilter> jobFilters) {
+        if (storageProvider == null) {
             throw new IllegalArgumentException("A JobStorageProvider is required to use the JobScheduler. Please see the documentation on how to setup a JobStorageProvider.");
+        }
         this.storageProvider = storageProvider;
         this.jobFilterUtils = new JobFilterUtils(new JobDefaultFilters(jobFilters));
     }
 
+    protected abstract Job buildJob(JobBuilder jobBuilder);
+
     /**
-     * @see #delete(UUID)
+     * Creates a new {@link org.jobrunr.jobs.Job} using a {@link JobBuilder} that can be enqueued or scheduled and provides an alternative to the job annotation.
+     *
+     * @param jobBuilder the {@link JobBuilder} with all the details of the job
+     * @return the id of the job
+     */
+    public JobId create(JobBuilder jobBuilder) {
+        return saveJob(buildJob(jobBuilder));
+    }
+
+    /**
+     * Creates a new {@link org.jobrunr.jobs.Job} for each {@link JobBuilder} and provides an alternative to the job annotation.
+     *
+     * @param jobBuilderStream the jobBuilders for which to create jobs.
+     */
+    public void create(Stream<JobBuilder> jobBuilderStream) {
+        saveJobsUsingStream(jobBuilderStream, this::buildJob);
+    }
+
+    /**
+     * See {@link #delete(UUID)}
      */
     public void delete(JobId jobId) {
         this.delete(jobId.asUUID());
     }
 
     /**
-     * @see #delete(UUID, String)
+     * See {@link #delete(UUID, String)}
      */
     public void delete(JobId jobId, String reason) {
         this.delete(jobId.asUUID(), reason);
     }
 
     /**
-     * Deletes a job and sets its state to DELETED. If the job is being processed, it will be interrupted.
+     * Deletes a job and sets its state to 'DELETED'. If the job is being processed, it will be interrupted.
      *
      * @param id the id of the job
      */
@@ -75,30 +96,39 @@ public class AbstractJobScheduler {
     }
 
     /**
-     * Deletes a job and sets its state to DELETED. If the job is being processed, it will be interrupted.
+     * Deletes a job and sets its state to 'DELETED'. If the job is being processed, it will be interrupted.
      *
      * @param id     the id of the job
      * @param reason the reason why the job is deleted.
      */
     public void delete(UUID id, String reason) {
-        final Job jobToDelete = storageProvider.getJobById(id);
-        jobToDelete.delete(reason);
-        jobFilterUtils.runOnStateElectionFilter(jobToDelete);
-        final Job deletedJob = storageProvider.save(jobToDelete);
-        jobFilterUtils.runOnStateAppliedFilters(deletedJob);
-        LOGGER.debug("Deleted Job with id {}", deletedJob.getId());
+        delete(id, reason, 3);
+    }
+
+    private void delete(UUID id, String reason, int retryCount) {
+        try {
+            final Job jobToDelete = storageProvider.getJobById(id);
+            jobToDelete.delete(reason);
+            jobFilterUtils.runOnStateElectionFilter(jobToDelete);
+            final Job deletedJob = storageProvider.save(jobToDelete);
+            jobFilterUtils.runOnStateAppliedFilters(deletedJob);
+            LOGGER.debug("Deleted Job with id {}", deletedJob.getId());
+        } catch (ConcurrentJobModificationException e) {
+            if (retryCount <= 0) throw e;
+            delete(id, reason, --retryCount);
+        }
     }
 
     /**
      * Deletes the recurring job based on the given id.
      * <h5>An example:</h5>
      * <pre>{@code
-     *      jobScheduler.delete("my-recurring-job"));
+     *      jobScheduler.deleteRecurringJob("my-recurring-job"));
      * }</pre>
      *
      * @param id the id of the recurring job to delete
      */
-    public void delete(String id) {
+    public void deleteRecurringJob(String id) {
         this.storageProvider.deleteRecurringJob(id);
     }
 
@@ -110,17 +140,33 @@ public class AbstractJobScheduler {
         JobRunr.destroy();
     }
 
+    <T> void saveJobsUsingStream(Stream<T> stream, Function<T, Job> toJob) {
+        Long ignored = stream
+                .map(toJob)
+                .collect(batchCollector(BATCH_SIZE, this::saveJobs));
+    }
+
     JobId enqueue(UUID id, JobDetails jobDetails) {
         return saveJob(new Job(id, jobDetails));
     }
 
-    JobId schedule(UUID id, Instant scheduleAt, JobDetails jobDetails) {
-        return saveJob(new Job(id, jobDetails, new ScheduledState(scheduleAt)));
+    JobId schedule(UUID id, Temporal scheduleAt, JobDetails jobDetails) {
+        return saveJob(new Job(id, jobDetails, scheduleAt instanceof CarbonAwarePeriod
+                ? new CarbonAwareAwaitingState((CarbonAwarePeriod) scheduleAt)
+                : new ScheduledState(toInstant(scheduleAt))
+        ));
     }
 
+    abstract String createRecurrently(RecurringJobBuilder recurringJobBuilder);
+
     String scheduleRecurrently(String id, JobDetails jobDetails, Schedule schedule, ZoneId zoneId) {
-        final RecurringJob recurringJob = new RecurringJob(id, jobDetails, schedule, zoneId);
+        final RecurringJob recurringJob = new RecurringJob(id, jobDetails, schedule, zoneId, API);
+        return scheduleRecurrently(recurringJob);
+    }
+
+    String scheduleRecurrently(RecurringJob recurringJob) {
         jobFilterUtils.runOnCreatingFilter(recurringJob);
+        validateRecurringJobSchedule(recurringJob);
         RecurringJob savedRecurringJob = this.storageProvider.saveRecurringJob(recurringJob);
         jobFilterUtils.runOnCreatedFilter(recurringJob);
         return savedRecurringJob.getId();
@@ -139,11 +185,18 @@ public class AbstractJobScheduler {
         return new JobId(job.getId());
     }
 
-    List<Job> saveJobs(List<Job> jobs) {
+    void saveJobs(List<Job> jobs) {
+        if (jobs.isEmpty()) return;
+
         jobs.forEach(MDCMapper::saveMDCContextToJob);
         jobFilterUtils.runOnCreatingFilter(jobs);
         final List<Job> savedJobs = this.storageProvider.save(jobs);
         jobFilterUtils.runOnCreatedFilter(savedJobs);
-        return savedJobs;
+    }
+
+    private void validateRecurringJobSchedule(RecurringJob recurringJob) {
+        Schedule schedule = recurringJob.getSchedule();
+        schedule.validate();
+        storageProvider.validateRecurringJobInterval(schedule.durationBetweenSchedules());
     }
 }

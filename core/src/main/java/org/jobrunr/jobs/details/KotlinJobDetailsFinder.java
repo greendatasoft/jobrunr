@@ -5,10 +5,12 @@ import org.jobrunr.utils.reflection.ReflectionUtils;
 import org.objectweb.asm.AnnotationVisitor;
 import org.objectweb.asm.Opcodes;
 
+import java.io.IOException;
 import java.io.InputStream;
 import java.lang.reflect.Field;
 import java.util.Optional;
 
+import static org.jobrunr.JobRunrException.shouldNotHappenException;
 import static org.jobrunr.jobs.details.JobDetailsGeneratorUtils.getKotlinClassContainingLambdaAsInputStream;
 import static org.jobrunr.jobs.details.JobDetailsGeneratorUtils.toFQResource;
 import static org.jobrunr.utils.reflection.ReflectionUtils.cast;
@@ -23,7 +25,7 @@ public class KotlinJobDetailsFinder extends AbstractJobDetailsFinder {
     private enum KotlinVersion {
         ONE_FOUR,
         ONE_FIVE,
-        ONE_SIX
+        ONE_SIX_OR_HIGHER
     }
 
     private final JobRunrJob jobRunrJob;
@@ -35,7 +37,11 @@ public class KotlinJobDetailsFinder extends AbstractJobDetailsFinder {
     KotlinJobDetailsFinder(JobRunrJob jobRunrJob, Object... params) {
         super(new KotlinJobDetailsBuilder(jobRunrJob, params));
         this.jobRunrJob = jobRunrJob;
-        parse(getClassContainingLambdaAsInputStream());
+        try (InputStream classContainingLambdaInputStream = getClassContainingLambdaAsInputStream()) {
+            parse(classContainingLambdaInputStream);
+        } catch (IOException e) {
+            throw shouldNotHappenException(e);
+        }
     }
 
     @Override
@@ -49,8 +55,8 @@ public class KotlinJobDetailsFinder extends AbstractJobDetailsFinder {
                         kotlinVersion = KotlinVersion.ONE_FOUR;
                     } else if (version[0] == 1 && version[1] == 5) {
                         kotlinVersion = KotlinVersion.ONE_FIVE;
-                    } else if (version[0] == 1 && version[1] == 6) {
-                        kotlinVersion = KotlinVersion.ONE_SIX;
+                    } else if (version[0] > 1 || (version[0] == 1 && version[1] >= 6)) {
+                        kotlinVersion = KotlinVersion.ONE_SIX_OR_HIGHER;
                     } else {
                         throw new UnsupportedOperationException("The Kotlin version " + version[0] + "." + version[1] + " is unsupported");
                     }
@@ -84,7 +90,7 @@ public class KotlinJobDetailsFinder extends AbstractJobDetailsFinder {
     }
 
     @Override
-    protected void parse(InputStream inputStream) {
+    protected void parse(InputStream inputStream) throws IOException {
         Optional<Field> field = ReflectionUtils.findField(jobRunrJob.getClass(), "function");
         if (field.isPresent()) {
             getJobDetailsFromKotlinFunction(field.get());
@@ -104,15 +110,17 @@ public class KotlinJobDetailsFinder extends AbstractJobDetailsFinder {
         jobDetailsBuilder.setMethodName(methodName);
     }
 
-    private void parseNestedClassIfItIsAMethodReference() {
+    private void parseNestedClassIfItIsAMethodReference() throws IOException {
         boolean isNestedKotlinClassWithMethodReference = nestedKotlinClassWithMethodReference != null
                 && !toFQResource(jobRunrJob.getClass().getName()).equals(nestedKotlinClassWithMethodReference);
 
         if (isNestedKotlinClassWithMethodReference) {
             String location = "/" + nestedKotlinClassWithMethodReference + ".class";
-            super.parse(jobRunrJob.getClass().getResourceAsStream(location));
-            while (jobDetailsBuilder.getInstructions().size() > 1) {
-                jobDetailsBuilder.pollFirstInstruction();
+            try (InputStream inputStream = jobRunrJob.getClass().getResourceAsStream(location)) {
+                super.parse(inputStream);
+                while (jobDetailsBuilder.getInstructions().size() > 1) {
+                    jobDetailsBuilder.pollFirstInstruction();
+                }
             }
         }
     }

@@ -1,11 +1,16 @@
 package org.jobrunr.storage.sql.common.db;
 
-import org.jobrunr.storage.sql.common.db.dialect.Dialect;
+import org.jobrunr.utils.annotations.VisibleFor;
 
-import java.sql.*;
-import java.time.Duration;
-import java.time.Instant;
-import java.util.*;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.util.Arrays;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 import java.util.stream.Stream;
@@ -13,7 +18,6 @@ import java.util.stream.StreamSupport;
 
 import static java.util.Arrays.stream;
 import static org.jobrunr.JobRunrException.shouldNotHappenException;
-import static org.jobrunr.storage.StorageProviderUtils.elementPrefixer;
 import static org.jobrunr.storage.sql.common.db.ConcurrentSqlModificationException.concurrentDatabaseModificationException;
 import static org.jobrunr.utils.reflection.ReflectionUtils.getValueFromFieldOrProperty;
 import static org.jobrunr.utils.reflection.ReflectionUtils.objectContainsFieldOrProperty;
@@ -23,22 +27,19 @@ public class Sql<T> {
     private static final String UPDATE = "update ";
     private static final String DELETE = "delete ";
 
-    private final List<String> paramNames;
     private final Map<String, Object> params;
     private final Map<String, Function<T, ?>> paramSuppliers;
 
-    private Dialect dialect;
+    protected Dialect dialect;
     private String tablePrefix;
-    private String suffix = "";
 
-    private static final Map<Integer, ParsedStatement> parsedStatementCache = new ConcurrentHashMap<>();
+    private static final Map<Integer, SqlStatement> parsedStatementCache = new ConcurrentHashMap<>();
     private String tableName;
     private Connection connection;
 
     protected Sql() {
-        paramNames = new ArrayList<>();
-        params = new HashMap<>();
-        paramSuppliers = new HashMap<>();
+        this.params = new HashMap<>();
+        this.paramSuppliers = new HashMap<>();
     }
 
     public static <T> Sql<T> forType(Class<T> tClass) {
@@ -50,11 +51,6 @@ public class Sql<T> {
         this.dialect = dialect;
         this.tablePrefix = tablePrefix;
         this.tableName = tableName;
-        return this;
-    }
-
-    public Sql<T> with(String name, Enum<?> value) {
-        params.put(name, value.name());
         return this;
     }
 
@@ -73,44 +69,26 @@ public class Sql<T> {
         return this;
     }
 
-    public Sql<T> withOrderLimitAndOffset(String order, int limit, long offset) {
-        with("limit", limit);
-        with("offset", offset);
-        suffix = dialect.limitAndOffset(order);
-        return this;
-    }
-
     public Stream<SqlResultSet> select(String statement) {
-        String parsedStatement = parse("select " + statement + suffix);
-        SqlSpliterator sqlSpliterator = new SqlSpliterator(connection, parsedStatement, this::setParams);
-        return StreamSupport.stream(sqlSpliterator, false);
+        return select(statement, "");
     }
 
-    public Stream<SqlResultSet> execute(String statement) {
-        String parsedStatement = parse(statement + suffix);
-        SqlSpliterator sqlSpliterator = new SqlSpliterator(connection, parsedStatement, this::setParams);
+    public Stream<SqlResultSet> select(String statement, String suffix) {
+        SqlSpliterator sqlSpliterator = new SqlSpliterator(() -> prepareStatementWithParams("select " + statement + suffix));
         return StreamSupport.stream(sqlSpliterator, false);
     }
 
     public long selectCount(String statement) throws SQLException {
-        String parsedStatement = parse("select count(*) " + statement);
-        try (PreparedStatement ps = connection.prepareStatement(parsedStatement)) {
-            setParams(ps);
-            try (ResultSet countResultSet = ps.executeQuery()) {
-                countResultSet.next();
-                return countResultSet.getLong(1);
-            }
+        try (PreparedStatement ps = prepareStatementWithParams("select count(*) " + statement); ResultSet countResultSet = ps.executeQuery()) {
+            countResultSet.next();
+            return countResultSet.getLong(1);
         }
     }
 
     public long selectSum(String column) throws SQLException {
-        String parsedStatement = parse("select sum(" + column + ") from " + tableName);
-        try (PreparedStatement ps = connection.prepareStatement(parsedStatement)) {
-            setParams(ps);
-            try (ResultSet countResultSet = ps.executeQuery()) {
-                countResultSet.next();
-                return countResultSet.getLong(1);
-            }
+        try (PreparedStatement ps = prepareStatementWithParams("select sum(" + column + ") from " + tableName); ResultSet sumResultSet = ps.executeQuery()) {
+            sumResultSet.next();
+            return sumResultSet.getLong(1);
         }
     }
 
@@ -135,34 +113,30 @@ public class Sql<T> {
     }
 
     public int delete(String statement) throws SQLException {
-        String parsedStatement = parse(DELETE + statement);
-        try (PreparedStatement ps = connection.prepareStatement(parsedStatement)) {
-            setParams(ps);
+        try (PreparedStatement ps = prepareStatementWithParams(DELETE + statement)) {
             return ps.executeUpdate();
         }
     }
 
-    private void insertOrUpdate(T item, String statement) throws SQLException {
-        String parsedStatement = parse(statement);
-        try (PreparedStatement ps = connection.prepareStatement(parsedStatement)) {
-            setParams(ps, item);
+    protected void insertOrUpdate(T item, String statement) throws SQLException {
+        insertOrUpdate(item, statement, updated -> updated >= 1);
+    }
+
+    private void insertOrUpdate(T item, String statement, Function<Integer, Boolean> expectedUpdatedRows) throws SQLException {
+        SqlStatement sqlStatement = parse(statement);
+        try (PreparedStatement ps = prepareStatement(sqlStatement)) {
+            setParams(sqlStatement, ps, item);
             final int updated = ps.executeUpdate();
-            if (updated != 1) {
+            if (!expectedUpdatedRows.apply(updated)) {
                 throw concurrentDatabaseModificationException(item, updated);
             }
-        } catch (SQLException e) {
-            String lowerCaseMessage = e.getMessage().toLowerCase();
-            if (e.getErrorCode() == -803 || lowerCaseMessage.contains("duplicate") || lowerCaseMessage.contains("primary key") || lowerCaseMessage.contains("unique constraint")) {
-                throw concurrentDatabaseModificationException(item, 0);
-            }
-            throw e;
         }
     }
 
     public void insertAll(List<T> batchCollection, String statement) throws SQLException {
         int[] result = insertOrUpdateAll(batchCollection, INSERT + statement);
         if (result.length != batchCollection.size()) {
-            throw shouldNotHappenException("Could not insert or update all objects - different result size: originalCollectionSize=" + batchCollection.size() + "; " + Arrays.toString(result));
+            throw shouldNotHappenException("Could not insert all objects - different result size: originalCollectionSize=" + batchCollection.size() + "; " + Arrays.toString(result));
         } else if (stream(result).anyMatch(i -> i < 1 && i != Statement.SUCCESS_NO_INFO)) {
             throw concurrentDatabaseModificationException(batchCollection, result);
         }
@@ -171,135 +145,70 @@ public class Sql<T> {
     public void updateAll(List<T> batchCollection, String statement) throws SQLException {
         int[] result = insertOrUpdateAll(batchCollection, UPDATE + statement);
         if (result.length != batchCollection.size()) {
-            throw shouldNotHappenException("Could not insert or update all objects - different result size: originalCollectionSize=" + batchCollection.size() + "; " + Arrays.toString(result));
+            throw shouldNotHappenException("Could not update all objects - different result size: originalCollectionSize=" + batchCollection.size() + "; " + Arrays.toString(result));
         } else if (stream(result).anyMatch(i -> i < 1 && i != Statement.SUCCESS_NO_INFO)) {
             throw concurrentDatabaseModificationException(batchCollection, result);
         }
     }
 
     private int[] insertOrUpdateAll(List<T> batchCollection, String statement) throws SQLException {
-        String parsedStatement = parse(statement);
-        try (PreparedStatement ps = connection.prepareStatement(parsedStatement)) {
+        if (batchCollection.isEmpty()) return new int[0];
+
+        SqlStatement sqlStatement = parse(statement);
+        try (PreparedStatement ps = prepareStatement(sqlStatement)) {
             for (T object : batchCollection) {
-                setParams(ps, object);
+                setParams(sqlStatement, ps, object);
                 ps.addBatch();
             }
             return ps.executeBatch();
         }
     }
 
-    private void setParams(PreparedStatement ps) {
-        try {
-            setParams(ps, null);
-        } catch (SQLException e) {
-            throw new IllegalStateException(e);
-        }
+    private PreparedStatement prepareStatementWithParams(String statement) throws SQLException {
+        SqlStatement sqlStatement = parse(statement);
+        PreparedStatement preparedStatement = prepareStatement(sqlStatement);
+        setParams(sqlStatement, preparedStatement, null);
+        return preparedStatement;
     }
 
-    private void setParams(PreparedStatement ps, T object) throws SQLException {
-        for (int i = 0; i < paramNames.size(); i++) {
-            String paramName = paramNames.get(i);
-            if (params.containsKey(paramName)) {
-                setParam(ps, i + 1, params.get(paramName));
-            } else if (paramSuppliers.containsKey(paramName)) {
-                setParam(ps, i + 1, paramSuppliers.get(paramName).apply(object));
-            } else if (objectContainsFieldOrProperty(object, paramName)) {
-                setParam(ps, i + 1, getValueFromFieldOrProperty(object, paramName));
-            } else if ("previousVersion" .equals(paramName)) {
-                setParam(ps, i + 1, ((int) paramSuppliers.get("version").apply(object)) - 1);
-            } else {
-                throw new IllegalArgumentException(String.format("Parameter %s is not known.", paramName));
-            }
-        }
+    private PreparedStatement prepareStatement(SqlStatement sqlStatement) throws SQLException {
+        return connection.prepareStatement(sqlStatement.getParsedSql(), ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
     }
 
-    private void setParam(PreparedStatement ps, int i, Object o) throws SQLException {
-        if (o instanceof Integer) {
-            ps.setInt(i, (Integer) o);
-        } else if (o instanceof Long) {
-            ps.setLong(i, (Long) o);
-        } else if (o instanceof Double) {
-            ps.setDouble(i, (Double) o);
-        } else if (o instanceof Boolean) {
-            ps.setInt(i, (boolean) o ? 1 : 0);
-        } else if (o instanceof Instant) {
-            ps.setTimestamp(i, Timestamp.from((Instant) o));
-        } else if (o instanceof Duration) {
-            ps.setString(i, o.toString());
-        } else if (o instanceof Enum) {
-            ps.setString(i, ((Enum<?>) o).name());
-        } else if (o instanceof UUID || o instanceof String) {
-            ps.setString(i, o.toString());
-        } else if (o == null) {
-            //TODO hack, use TypeResolver to keep track of type
-            ps.setTimestamp(i, null);
+    private void setParams(SqlStatement sqlStatement, PreparedStatement ps, T object) throws SQLException {
+        for (int i = 0; i < sqlStatement.getParamNames().size(); i++) {
+            String paramName = sqlStatement.getParamNames().get(i);
+            Object paramValue = getParamValue(paramName, object);
+            dialect.setParam(ps, i + 1, paramName, paramValue);
+        }
+        params.clear();
+    }
+
+    final SqlStatement parse(String originalSql) {
+        return parsedStatementCache.computeIfAbsent(
+                SqlStatement.statementKey(tablePrefix, originalSql),
+                hash -> parseStatement(originalSql));
+    }
+
+    @VisibleFor("testing")
+    protected SqlStatement parseStatement(String originalSql) {
+        return new SqlStatement(tablePrefix, tableName, dialect, originalSql);
+    }
+
+    private Object getParamValue(String paramName, T object) {
+        if (params.containsKey(paramName)) {
+            return params.get(paramName);
+        } else if (paramSuppliers.containsKey(paramName)) {
+            return paramSuppliers.get(paramName).apply(object);
+        } else if (objectContainsFieldOrProperty(object, paramName)) {
+            return getValueFromFieldOrProperty(object, paramName);
+        } else if ("previousVersion".equals(paramName)) {
+            return ((int) paramSuppliers.get("version").apply(object)) - 1;
+        } else if (paramName.contains("-") && params.containsKey(paramName.split("-", 0)[0])) {
+            String[] splitParam = paramName.split("-", 0);
+            return ((List<?>) params.get(splitParam[0])).get(Integer.parseInt(splitParam[1]));
         } else {
-            throw new IllegalStateException(String.format("Found a value which could not be set in the preparedstatement: %s: %s", o.getClass(), o));
-        }
-    }
-
-    final String parse(String query) {
-        final ParsedStatement parsedStatement = parsedStatementCache.computeIfAbsent(query.hashCode(), hash -> createParsedStatement(query));
-        paramNames.clear();
-        paramNames.addAll(parsedStatement.paramNames);
-        return parsedStatement.sqlStatement;
-    }
-
-    final ParsedStatement createParsedStatement(String query) {
-        final String parsedStatement = parseStatement(dialect.escape(query));
-        return new ParsedStatement(parsedStatement, new ArrayList<>(paramNames));
-    }
-
-    final String parseStatement(String query) {
-        paramNames.clear();
-        // I was originally using regular expressions, but they didn't work well for ignoring
-        // parameter-like strings inside quotes.
-        int length = query.length();
-        StringBuilder parsedQuery = new StringBuilder(length);
-        boolean inSingleQuote = false;
-        boolean inDoubleQuote = false;
-
-        for (int i = 0; i < length; i++) {
-            char c = query.charAt(i);
-            if (inSingleQuote) {
-                if (c == '\'') {
-                    inSingleQuote = false;
-                }
-            } else if (inDoubleQuote) {
-                if (c == '"') {
-                    inDoubleQuote = false;
-                }
-            } else {
-                if (c == '\'') {
-                    inSingleQuote = true;
-                } else if (c == '"') {
-                    inDoubleQuote = true;
-                } else if (c == ':' && i + 1 < length &&
-                        Character.isJavaIdentifierStart(query.charAt(i + 1)) && !parsedQuery.toString().endsWith(":")) {
-                    int j = i + 2;
-                    while (j < length && Character.isJavaIdentifierPart(query.charAt(j))) {
-                        j++;
-                    }
-                    String name = query.substring(i + 1, j);
-                    c = '?'; // replace the parameter with a question mark
-                    i += name.length(); // skip past the end if the parameter
-
-                    paramNames.add(name);
-                }
-            }
-            parsedQuery.append(c);
-        }
-        return parsedQuery.toString()
-                .replace(tableName, elementPrefixer(tablePrefix, tableName));
-    }
-
-    private static class ParsedStatement {
-        private final String sqlStatement;
-        private final List<String> paramNames;
-
-        public ParsedStatement(String sqlStatement, List<String> paramNames) {
-            this.sqlStatement = sqlStatement;
-            this.paramNames = paramNames;
+            throw new IllegalArgumentException(String.format("Parameter %s is not known.", paramName));
         }
     }
 }

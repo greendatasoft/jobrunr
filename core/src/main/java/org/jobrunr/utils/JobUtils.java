@@ -1,23 +1,37 @@
 package org.jobrunr.utils;
 
+import org.jobrunr.jobs.AbstractJob;
 import org.jobrunr.jobs.JobDetails;
 import org.jobrunr.jobs.JobParameter;
 import org.jobrunr.jobs.annotations.Job;
+import org.jobrunr.jobs.annotations.Recurring;
 import org.jobrunr.jobs.context.JobContext;
+import org.jobrunr.jobs.lambdas.JobRequestHandler;
 import org.jobrunr.scheduling.exceptions.JobClassNotFoundException;
 import org.jobrunr.scheduling.exceptions.JobMethodNotFoundException;
-import org.jobrunr.utils.reflection.ReflectionUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Method;
-import java.util.Arrays;
+import java.lang.reflect.Modifier;
 import java.util.Optional;
 import java.util.stream.Stream;
 
 import static java.util.stream.Collectors.joining;
-import static org.jobrunr.utils.reflection.ReflectionUtils.*;
+import static org.jobrunr.utils.GraalVMUtils.isRunningInGraalVMNativeMode;
+import static org.jobrunr.utils.StringUtils.substringAfterLast;
+import static org.jobrunr.utils.StringUtils.substringBefore;
+import static org.jobrunr.utils.StringUtils.substringBeforeLast;
+import static org.jobrunr.utils.StringUtils.substringBetween;
+import static org.jobrunr.utils.reflection.ReflectionUtils.cast;
+import static org.jobrunr.utils.reflection.ReflectionUtils.classExists;
+import static org.jobrunr.utils.reflection.ReflectionUtils.findMethod;
+import static org.jobrunr.utils.reflection.ReflectionUtils.toClass;
 
 public class JobUtils {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(JobUtils.class);
 
     private JobUtils() {
     }
@@ -46,86 +60,130 @@ public class JobUtils {
     }
 
     public static void assertJobExists(JobDetails jobDetails) {
-        if (!jobDetails.hasStaticFieldName() && getJobMethod(jobDetails) == null)
-            throw new IllegalStateException("Job does not exist");
+        String className = getJobClassName(jobDetails);
+        String methodName = jobDetails.getMethodName();
+        String[] jobParameterTypesNames = getDeserializableJobParametersForSignature(jobDetails);
+        if (jobParameterTypesNames.length == jobDetails.getJobParameters().size()) {
+            assertJobExists(className, methodName, jobParameterTypesNames);
+        } else {
+            throw new JobMethodNotFoundException(jobDetails);
+        }
+    }
+
+    public static void assertJobExists(String jobSignature) {
+        String className = getClassNameFromJobSignature(jobSignature);
+        String methodName = getMethodNameFromJobSignature(jobSignature);
+        String[] jobParameterTypeNames = getParameterTypeNamesFromJobSignature(jobSignature);
+        assertJobExists(className, methodName, jobParameterTypeNames);
+    }
+
+    public static void assertJobExists(String className, String methodName, String[] jobParameterTypeNames) {
+        if (className.startsWith("java.") || className.startsWith("javax.")) return; // we assume that JDK classes don't change often
+        if (!classExists(className)) {
+            throw new JobClassNotFoundException(className, methodName, jobParameterTypeNames);
+        }
+        if (!jobExists(className, methodName, jobParameterTypeNames)) {
+            throw new JobMethodNotFoundException(className, methodName, jobParameterTypeNames);
+        }
     }
 
     public static boolean jobExists(String jobSignature) {
-        if (jobSignature.startsWith("java.") || jobSignature.startsWith("javax."))
-            return true; // we assume that JDK classes don't change often
+        if (jobSignature.startsWith("java.") || jobSignature.startsWith("javax.")) return true; // we assume that JDK classes don't change often
+        String clazzName = getClassNameFromJobSignature(jobSignature);
+        String methodName = getMethodNameFromJobSignature(jobSignature);
+        String[] jobParameterTypeNames = getParameterTypeNamesFromJobSignature(jobSignature);
+        return jobExists(clazzName, methodName, jobParameterTypeNames);
 
-        try {
-            String clazzAndMethod = getFQClassNameAndMethod(jobSignature);
-            String clazzName = getFQClassName(clazzAndMethod);
-            String method = getMethodName(clazzAndMethod);
+    }
 
-            Class<Object> clazz = toClass(clazzName);
-            Class<?>[] jobParameterTypes = getParameterTypes(jobSignature);
-            return findMethod(clazz, method, jobParameterTypes).isPresent();
-        } catch (IllegalArgumentException e) {
-            return false;
+    public static boolean jobExists(String clazzName, String methodName, String[] jobParameterTypeNames) {
+        Optional<Method> optionalMethod = findMethod(clazzName, methodName, jobParameterTypeNames);
+        if (optionalMethod.isPresent()) {
+            Method method = optionalMethod.get();
+            boolean isJobRequestHandlerWithWrongRunMethodArgument = Modifier.isAbstract(method.getModifiers()) && JobRequestHandler.class.isAssignableFrom(method.getDeclaringClass());
+            return !isJobRequestHandlerWithWrongRunMethodArgument;
         }
+        return false;
     }
 
     public static Optional<Job> getJobAnnotation(JobDetails jobDetails) {
         return cast(getJobAnnotations(jobDetails).filter(jobAnnotation -> jobAnnotation.annotationType().equals(Job.class)).findFirst());
     }
 
-    public static String getJobSignature(org.jobrunr.jobs.Job job) {
+    public static Optional<Recurring> getRecurringAnnotation(JobDetails jobDetails) {
+        return cast(getJobAnnotations(jobDetails).filter(jobAnnotation -> jobAnnotation.annotationType().equals(Recurring.class)).findFirst());
+    }
+
+    public static String getJobSignature(AbstractJob job) {
         return getJobSignature(job.getJobDetails());
     }
 
     public static String getJobSignature(JobDetails jobDetails) {
         String result = getJobClassAndMethodName(jobDetails);
-        result += "(" + jobDetails.getJobParameters().stream().map(JobUtils::getJobParameterForSignature).collect(joining(",")) + ")";
+        result += "(" + jobDetails.getJobParameters().stream().map(JobUtils::getJobParameterForSignature).collect(joining(", ")) + ")";
         return result;
     }
 
     private static Stream<Annotation> getJobAnnotations(JobDetails jobDetails) {
         if (jobDetails.getClassName().startsWith("java")) return Stream.empty();
+        if (!classExists(jobDetails.getClassName())) {
+            if (isRunningInGraalVMNativeMode()) {
+                LOGGER.warn("Trying to find Job Annotations for '{}' but the class could not be found. The Job name and other properties like retries and labels will not be set on the Job. As you're running your application in GraalVM native mode, make sure that your job class is available in the native image. Normally, this is done automatically by JobRunr.", getJobSignature(jobDetails), new JobClassNotFoundException(jobDetails));
+            } else {
+                LOGGER.warn("Trying to find Job Annotations for '{}' but the class could not be found. The Job name and other properties like retries and labels will not be set on the Job.", getJobSignature(jobDetails), new JobClassNotFoundException(jobDetails));
+            }
+            return Stream.empty();
+        }
 
         Method jobMethod = getJobMethod(jobDetails);
         return Stream.of(jobMethod.getDeclaredAnnotations());
     }
 
-    private static String getFQClassNameAndMethod(String jobSignature) {
-        return jobSignature.substring(0, jobSignature.indexOf("("));
+    public static String getClassNameFromJobSignature(String jobSignature) {
+        return substringBeforeLast(getClassNameAndMethodFromJobSignature(jobSignature), ".");
     }
 
-    private static String getFQClassName(String clazzAndMethod) {
-        return clazzAndMethod.substring(0, clazzAndMethod.lastIndexOf("."));
+    public static String getMethodNameFromJobSignature(String jobSignature) {
+        return substringAfterLast(getClassNameAndMethodFromJobSignature(jobSignature), ".");
     }
 
-    private static String getMethodName(String clazzAndMethod) {
-        return clazzAndMethod.substring(clazzAndMethod.lastIndexOf(".") + 1);
+    public static String[] getParameterTypeNamesFromJobSignature(String jobSignature) {
+        String jobParameterTypesAsString = substringBetween(jobSignature, "(", ")");
+        if (jobParameterTypesAsString.replaceAll("\\s", "").isEmpty()) return new String[]{};
+        return Stream.of(jobParameterTypesAsString.split(",")).map(String::trim).toArray(String[]::new);
     }
 
-    private static Class<?>[] getParameterTypes(String jobSignature) {
-        String jobParameterTypesAsString = jobSignature.substring(jobSignature.indexOf("(") + 1, jobSignature.length() - 1);
+    private static String getClassNameAndMethodFromJobSignature(String jobSignature) {
+        return substringBefore(jobSignature, "(");
+    }
 
-        if (jobParameterTypesAsString.replaceAll("\\s", "").isEmpty()) return new Class[]{};
-
-        Class<?>[] jobParameterTypes = Arrays.stream(jobParameterTypesAsString.split(","))
-                .map(ReflectionUtils::toClass)
-                .toArray(Class[]::new);
-        return jobParameterTypes;
+    private static String[] getDeserializableJobParametersForSignature(JobDetails jobDetails) {
+        return jobDetails.getJobParameters().stream().filter(JobParameter::isDeserializable).map(JobUtils::getJobParameterForSignature).toArray(String[]::new);
     }
 
     private static String getJobParameterForSignature(JobParameter jobParameter) {
-        return jobParameter.getObject() != null ? jobParameter.getObject().getClass().getName() : jobParameter.getClassName();
+        return jobParameter.isDeserializable() && jobParameter.getObject() != null
+                ? jobParameter.getObject().getClass().getName()
+                : jobParameter.getClassName();
     }
 
     private static String getJobClassAndMethodName(JobDetails jobDetails) {
-        String result = jobDetails.getClassName();
-        Optional<String> staticFieldName = Optional.ofNullable(jobDetails.getStaticFieldName());
-        if (staticFieldName.isPresent()) result += "." + staticFieldName.get();
+        String result = getJobClassName(jobDetails);
         result += "." + jobDetails.getMethodName();
+        return result;
+    }
+
+    private static String getJobClassName(JobDetails jobDetails) {
+        String result = jobDetails.getClassName();
+        if (jobDetails.getStaticFieldName() != null) result += "." + jobDetails.getStaticFieldName();
         return result;
     }
 
     private static String getJobParameterValue(JobParameter jobParameter) {
         if (jobParameter.getClassName().equals(JobContext.class.getName())) {
             return JobContext.class.getSimpleName();
+        } else if (jobParameter.getObject() == null) {
+            return null;
         }
         return jobParameter.getObject().toString();
     }

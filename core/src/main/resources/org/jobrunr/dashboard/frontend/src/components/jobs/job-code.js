@@ -1,30 +1,22 @@
-import Grid from "@material-ui/core/Grid";
-import Highlight from "react-highlight";
-import React from "react";
-import {makeStyles} from "@material-ui/core/styles";
-
-const useStyles = makeStyles(theme => ({
-    codeContent: {
-        marginTop: 0,
-        paddingTop: "0 !important",
-        '& > pre': {
-            marginTop: 0,
-        }
-    }
-}));
+import Grid from "@mui/material/Grid";
+import Highlight from "../utils/highlighter";
 
 const JobCode = (props) => {
-    const { job } = props;
-    const classes = useStyles();
+    const {job} = props;
 
     const fqClassName = job.jobDetails.className;
     const className = job.jobDetails.className.substring(job.jobDetails.className.lastIndexOf(".") + 1);
     const staticFieldName = job.jobDetails.staticFieldName;
     const methodName = job.jobDetails.methodName;
-    const parameters = job.jobDetails.jobParameters.map(jobParameter => jobParameter.object).join(", ")
+    const parameters = job.jobDetails.jobParameters
+        .map(jobParameter => jobParameter.object)
+        .map(object =>
+            typeof object === "object" ? JSON.stringify(object) : object
+        )
+        .join(", ")
 
     let totalFunction = className;
-    if(staticFieldName) {
+    if (staticFieldName) {
         totalFunction += "." + staticFieldName;
     }
     totalFunction += "." + methodName;
@@ -38,8 +30,10 @@ const JobCode = (props) => {
     `;
 
     return (
-        <Grid item xs={12} className={classes.codeContent}>
-            <Highlight className='language-java'>
+        <Grid
+            sx={{'& > pre': {margin: 0}}}
+            size={12}>
+            <Highlight language="java">
                 {code}
             </Highlight>
         </Grid>

@@ -1,12 +1,12 @@
 CREATE TABLE jobrunr_jobs
 (
-    id           nchar(36)      NULL,
+    id           nchar(36) NULL,
     version      number(10)     NOT NULL,
-    jobasjson    clob           NOT NULL,
+    jobAsJson    clob         NOT NULL,
     jobSignature NVARCHAR2(512) NOT NULL,
     state        NVARCHAR2(36)  NOT NULL,
-    createdAt    TIMESTAMP(6)   NOT NULL,
-    updatedAt    TIMESTAMP(6)   NOT NULL,
+    createdAt    TIMESTAMP(6) NOT NULL,
+    updatedAt    TIMESTAMP(6) NOT NULL,
     scheduledAt  TIMESTAMP(6),
     PRIMARY KEY (id)
 );

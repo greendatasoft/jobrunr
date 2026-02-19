@@ -89,6 +89,17 @@ class JobRunrDashboardLoggerTest {
     }
 
     @Test
+    void testInfoLoggingWithJobMarkerAndFormattingMultipleArguments() {
+        final Job job = aJobInProgress().build();
+        JobRunrDashboardLogger.setJob(job);
+
+        jobRunrDashboardLogger.info(marker, "simple message {} {} {}", "hello", "again", "there");
+
+        verify(slfLogger).info(marker, "simple message {} {} {}", "hello", "again", "there");
+        assertThat(job).hasMetadata(InfoLog.withMessage("[some marker] simple message hello again there"));
+    }
+
+    @Test
     void testWarnLoggingWithoutJob() {
         jobRunrDashboardLogger.warn("simple message");
 
@@ -129,6 +140,17 @@ class JobRunrDashboardLoggerTest {
     }
 
     @Test
+    void testWarnLoggingWithJobMarkerAndFormattingMultipleArguments() {
+        final Job job = aJobInProgress().build();
+        JobRunrDashboardLogger.setJob(job);
+
+        jobRunrDashboardLogger.warn(marker, "simple message {} {} {}", "hello", "again", "there");
+
+        verify(slfLogger).warn(marker, "simple message {} {} {}", "hello", "again", "there");
+        assertThat(job).hasMetadata(WarnLog.withMessage("[some marker] simple message hello again there"));
+    }
+
+    @Test
     void testErrorLoggingWithoutJob() {
         jobRunrDashboardLogger.error("simple message");
 
@@ -166,6 +188,32 @@ class JobRunrDashboardLoggerTest {
 
         verify(slfLogger).error("simple message {} {} {}", "hello", "again", "there");
         assertThat(job).hasMetadata(ErrorLog.withMessage("simple message hello again there"));
+    }
+
+    @Test
+    void testErrorLoggingWithJobMarkerAndFormattingMultipleArguments() {
+        final Job job = aJobInProgress().build();
+        JobRunrDashboardLogger.setJob(job);
+
+        jobRunrDashboardLogger.error(marker, "simple message {} {} {}", "hello", "again", "there");
+
+        verify(slfLogger).error(marker, "simple message {} {} {}", "hello", "again", "there");
+        assertThat(job).hasMetadata(ErrorLog.withMessage("[some marker] simple message hello again there"));
+    }
+
+    @Test
+    void testErrorLoggingWithJobMultipleMarkersAndFormattingMultipleArguments() {
+        Marker givenMarker = MarkerFactory.getMarker("given-marker");
+        givenMarker.add(MarkerFactory.getMarker("some other marker a"));
+        givenMarker.add(MarkerFactory.getMarker("some other marker b"));
+
+        final Job job = aJobInProgress().build();
+        JobRunrDashboardLogger.setJob(job);
+
+        jobRunrDashboardLogger.error(givenMarker, "simple message {} {} {}", "hello", "again", "there");
+
+        verify(slfLogger).error(givenMarker, "simple message {} {} {}", "hello", "again", "there");
+        assertThat(job).hasMetadata(ErrorLog.withMessage("[given-marker (some other marker a, some other marker b)] simple message hello again there"));
     }
 
     @Test
@@ -441,7 +489,7 @@ class JobRunrDashboardLoggerTest {
             super(Level.INFO, message);
         }
 
-        public static InfoLog withMessage(String message) {
+        static InfoLog withMessage(String message) {
             return new InfoLog(message);
         }
     }
@@ -452,7 +500,7 @@ class JobRunrDashboardLoggerTest {
             super(Level.WARN, message);
         }
 
-        public static WarnLog withMessage(String message) {
+        static WarnLog withMessage(String message) {
             return new WarnLog(message);
         }
     }
@@ -463,24 +511,23 @@ class JobRunrDashboardLoggerTest {
             super(Level.ERROR, message);
         }
 
-        public static ErrorLog withMessage(String message) {
+        static ErrorLog withMessage(String message) {
             return new ErrorLog(message);
         }
     }
 
-    private static class LogCondition extends Condition {
+    private static class LogCondition extends Condition<Map<String, Object>> {
 
         private final Level level;
         private final String message;
 
-        protected LogCondition(Level level, String message) {
+        LogCondition(Level level, String message) {
             this.level = level;
             this.message = message;
         }
 
         @Override
-        public boolean matches(Object value) {
-            Map<String, Object> metadata = cast(value);
+        public boolean matches(Map<String, Object> metadata) {
             JobDashboardLogLines logLines = cast(metadata.get("jobRunrDashboardLog-2"));
             return logLines.getLogLines().stream().anyMatch(logLine -> level.equals(logLine.getLevel()) && message.equals(logLine.getLogMessage()));
         }

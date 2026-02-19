@@ -2,17 +2,19 @@ package org.jobrunr.scheduling.cron;
 
 import org.jobrunr.scheduling.Schedule;
 
-import java.time.*;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.Month;
+import java.time.Year;
+import java.time.YearMonth;
+import java.time.ZoneId;
 import java.util.BitSet;
-import java.util.Calendar;
+
+import static org.jobrunr.utils.LocalDateUtils.nowUsingSystemDefault;
 
 /**
  * Schedule class represents a parsed crontab expression.
- *
- * <p>
- * The schedule class cannot be instantiated using a constructor, a Schedule
- * object can be obtain by using the static {@link #create} method, which parses
- * a crontab expression and creates a Schedule object.
  * <p>
  * Original version <a href="https://github.com/asahaf/javacron">https://github.com/asahaf/javacron</a>
  *
@@ -33,25 +35,20 @@ public class CronExpression extends Schedule {
     private static final CronFieldParser MONTHS_FIELD_PARSER = new CronFieldParser(CronFieldType.MONTH);
     private static final CronFieldParser DAY_OF_WEEK_FIELD_PARSER = new CronFieldParser(CronFieldType.DAY_OF_WEEK);
 
-    private CronExpression() {
-    }
-
-    private String expression;
-
-    private boolean hasSecondsField;
-    private DaysAndDaysOfWeekRelation daysAndDaysOfWeekRelation;
-    private BitSet seconds;
-    private BitSet minutes;
-    private BitSet hours;
-    private BitSet days;
-    private BitSet months;
-    private BitSet daysOfWeek;
-    private BitSet daysOf5Weeks;
-    private boolean isLastDayOfMonth;
+    private final boolean hasSecondsField;
+    private final DaysAndDaysOfWeekRelation daysAndDaysOfWeekRelation;
+    private final BitSet seconds;
+    private final BitSet minutes;
+    private final BitSet hours;
+    private final BitSet days;
+    private final BitSet months;
+    private final BitSet daysOfWeek;
+    private final BitSet daysOf5Weeks;
+    private final boolean isLastDayOfMonth;
     private boolean isSpecificLastDayOfMonth;
 
     /**
-     * Parses crontab expression and create a Schedule object representing that
+     * Parses crontab expression, with optional carbon aware margin, and create a Schedule object representing that
      * expression.
      * <p>
      * The expression string can be 5 fields expression for minutes resolution.
@@ -83,8 +80,7 @@ public class CronExpression extends Schedule {
      * "* * * * * *"
      * </pre>
      *
-     * @param expression a crontab expression string used to create Schedule.
-     * @return Schedule object created based on the supplied crontab expression.
+     * @param expression a crontab expression string, with optional carbon aware margin, used to create Schedule.
      * @throws InvalidCronExpressionException if the provided crontab expression is
      *                                        invalid. The crontab expression is
      *                                        considered invalid if it is not properly
@@ -97,66 +93,64 @@ public class CronExpression extends Schedule {
      *                                        never has 30 days and a schedule like this
      *                                        never occurs.
      */
-    public static CronExpression create(String expression) {
-        if (expression.isEmpty()) {
-            throw new InvalidCronExpressionException("empty expression");
+    public CronExpression(String expression) {
+        super(expression);
+        if (getExpression().isEmpty()) {
+            throw new InvalidCronExpressionException("Empty cron expression");
         }
-        String[] fields = expression.trim().toLowerCase().split("\\s+");
+        String[] fields = getExpression().trim().toLowerCase().split("\\s+", 0);
         int count = fields.length;
         if (count > 6 || count < 5) {
             throw new InvalidCronExpressionException(
-                    "crontab expression should have 6 fields for (seconds resolution) or 5 fields for (minutes resolution)");
+                    "crontab expression should have 6 fields for (seconds resolution) or 5 fields for (minutes resolution). Provided: " + expression);
         }
-        CronExpression cronExpression = new CronExpression();
-        cronExpression.hasSecondsField = count == 6;
+        this.hasSecondsField = count == 6;
         String token;
         int index = 0;
-        if (cronExpression.hasSecondsField) {
+        if (this.hasSecondsField) {
             token = fields[index++];
-            cronExpression.seconds = CronExpression.SECONDS_FIELD_PARSER.parse(token);
+            this.seconds = CronExpression.SECONDS_FIELD_PARSER.parse(token);
         } else {
-            cronExpression.seconds = new BitSet(1);
-            cronExpression.seconds.set(0);
+            this.seconds = new BitSet(1);
+            this.seconds.set(0);
         }
         token = fields[index++];
-        cronExpression.minutes = CronExpression.MINUTES_FIELD_PARSER.parse(token);
+        this.minutes = CronExpression.MINUTES_FIELD_PARSER.parse(token);
 
         token = fields[index++];
-        cronExpression.hours = CronExpression.HOURS_FIELD_PARSER.parse(token);
+        this.hours = CronExpression.HOURS_FIELD_PARSER.parse(token);
 
         token = fields[index++];
         String daysToken = token;
-        cronExpression.days = CronExpression.DAYS_FIELD_PARSER.parse(token);
-        cronExpression.isLastDayOfMonth = token.equals("l");
+        this.days = CronExpression.DAYS_FIELD_PARSER.parse(token);
+        this.isLastDayOfMonth = token.equals("l");
         boolean daysStartWithAsterisk = token.startsWith("*");
 
         token = fields[index++];
-        cronExpression.months = CronExpression.MONTHS_FIELD_PARSER.parse(token);
+        this.months = CronExpression.MONTHS_FIELD_PARSER.parse(token);
 
         token = fields[index++];
-        cronExpression.daysOfWeek = CronExpression.DAY_OF_WEEK_FIELD_PARSER.parse(token);
+        this.daysOfWeek = CronExpression.DAY_OF_WEEK_FIELD_PARSER.parse(token);
         boolean daysOfWeekStartAsterisk = token.startsWith("*");
 
         if (token.length() == 2 && token.endsWith("l")) {
-            if(cronExpression.isLastDayOfMonth) {
+            if (this.isLastDayOfMonth) {
                 throw new InvalidCronExpressionException("You can only specify the last day of month week in either the DAY field or in the DAY_OF_WEEK field, not both.");
             }
             if (!daysToken.equalsIgnoreCase("*")) {
                 throw new InvalidCronExpressionException("when last days of month is specified. the day of the month must be \"*\"");
             }
-            // this flag will be used later duing finding the next schedule as some months have less than 31 days
-            cronExpression.isSpecificLastDayOfMonth = true;
+            // this flag will be used later for finding the next schedule as some months have less than 31 days
+            this.isSpecificLastDayOfMonth = true;
         }
-        cronExpression.daysOf5Weeks = generateDaysOf5Weeks(cronExpression.daysOfWeek);
+        this.daysOf5Weeks = generateDaysOf5Weeks(this.daysOfWeek);
 
-        cronExpression.daysAndDaysOfWeekRelation = (daysStartWithAsterisk || daysOfWeekStartAsterisk)
+        this.daysAndDaysOfWeekRelation = (daysStartWithAsterisk || daysOfWeekStartAsterisk)
                 ? DaysAndDaysOfWeekRelation.INTERSECT
                 : DaysAndDaysOfWeekRelation.UNION;
 
-        if (!cronExpression.canScheduleActuallyOccur())
+        if (!this.canScheduleActuallyOccur())
             throw new InvalidCronExpressionException("Cron expression not valid. The specified months do not have the day 30th or the day 31st");
-        cronExpression.expression = expression.trim();
-        return cronExpression;
     }
 
     /**
@@ -246,10 +240,12 @@ public class CronExpression extends Schedule {
                 hour = this.hours.nextSetBit(0);
             }
             day = candidateDay;
-            return LocalDateTime
+            Instant possibleNextRun = LocalDateTime
                     .of(year, month, day, hour, minute, second)
                     .atZone(zoneId)
                     .toInstant();
+            if (possibleNextRun.isAfter(currentInstant)) return possibleNextRun;
+            return next(createdAtInstant, possibleNextRun, zoneId);
         }
     }
 
@@ -289,25 +285,11 @@ public class CronExpression extends Schedule {
         return result;
     }
 
-    public static boolean isLeapYear(int year) {
-        Calendar cal = Calendar.getInstance();
-        cal.set(Calendar.YEAR, year);
-        return cal.getActualMaximum(Calendar.DAY_OF_YEAR) > 365;
-    }
-
-    public int getNumberOfFields() {
-        return hasSecondsField ? 6 : 5;
-    }
-
-    public String getExpression() {
-        return expression;
-    }
-
     private boolean canScheduleActuallyOccur() {
         if (this.daysAndDaysOfWeekRelation == DaysAndDaysOfWeekRelation.UNION || this.days.nextSetBit(0) < 29)
             return true;
 
-        int aYear = LocalDateTime.now().getYear();
+        int aYear = nowUsingSystemDefault().getYear();
         for (int dayIndex = 29; dayIndex < 31; dayIndex++) {
             if (!this.days.get(dayIndex))
                 continue;
@@ -349,7 +331,7 @@ public class CronExpression extends Schedule {
         int dayCountInMonth;
         if (month == Month.FEBRUARY.getValue() /* Feb */) {
             dayCountInMonth = 28;
-            if (isLeapYear(year)) {
+            if (Year.isLeap(year)) {
                 dayCountInMonth++;
             }
         } else {
@@ -374,19 +356,5 @@ public class CronExpression extends Schedule {
             }
         }
         return updatedDays;
-    }
-
-    public void validateSchedule() {
-        Instant base = Instant.EPOCH;
-        Instant fiveSeconds = base.plusSeconds(SMALLEST_SCHEDULE_IN_SECONDS);
-
-        if (next(base, base, ZoneOffset.UTC).isBefore(fiveSeconds)) {
-            throw new IllegalArgumentException(String.format("The smallest interval for recurring jobs is %d seconds. Please also make sure that your 'pollIntervalInSeconds' configuration matches the smallest recurring job interval.", SMALLEST_SCHEDULE_IN_SECONDS));
-        }
-    }
-
-    @Override
-    public String toString() {
-        return expression;
     }
 }

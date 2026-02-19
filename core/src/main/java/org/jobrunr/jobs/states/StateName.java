@@ -4,6 +4,7 @@ import java.util.function.Predicate;
 
 public enum StateName {
 
+    AWAITING,
     SCHEDULED,
     ENQUEUED,
     PROCESSING,
@@ -12,4 +13,15 @@ public enum StateName {
     DELETED;
 
     public static final Predicate<JobState> FAILED_STATES = FailedState.class::isInstance;
+
+    public static StateName[] getStateNames(StateName... stateNames) {
+        if (stateNames.length < 1) {
+            return StateName.values();
+        }
+        return stateNames;
+    }
+
+    public static boolean areAllStateNames(StateName... stateNames) {
+        return stateNames.length < 1 || stateNames.length == StateName.values().length;
+    }
 }

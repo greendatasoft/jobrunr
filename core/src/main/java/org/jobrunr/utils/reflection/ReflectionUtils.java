@@ -3,14 +3,14 @@ package org.jobrunr.utils.reflection;
 import org.jobrunr.scheduling.exceptions.FieldNotFoundException;
 import org.jobrunr.scheduling.exceptions.JobNotFoundException;
 import org.jobrunr.utils.reflection.autobox.Autoboxer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.lang.reflect.AccessibleObject;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.file.Path;
-import java.security.AccessController;
-import java.security.PrivilegedAction;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -23,6 +23,8 @@ import static org.jobrunr.JobRunrException.shouldNotHappenException;
 import static org.jobrunr.utils.StringUtils.capitalize;
 
 public class ReflectionUtils {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(ReflectionUtils.class);
 
     private static final String ROOT_PACKAGE_NAME = "org/jobrunr/";
     private static final Map<Class<?>, Class<?>> PRIMITIVE_TO_TYPE_MAPPING = new HashMap<>();
@@ -93,15 +95,12 @@ public class ReflectionUtils {
     public static Class<?> loadClass(String className) throws ClassNotFoundException {
         // why: support for quarkus:dev (see https://github.com/quarkusio/quarkus/issues/2809) and Spring Boot Live reload
         // Jackson uses this order also
-        try {
-            ClassLoader classLoader = currentThread().getContextClassLoader();
-            if (classLoader != null) {
-                return Class.forName(className, true, classLoader);
-            }
-        } catch (ClassNotFoundException e) {
-            // support for Spring Boot Executable jar. See https://github.com/jobrunr/jobrunr/issues/81
+        ClassLoader classLoader = currentThread().getContextClassLoader();
+        if (classLoader != null) {
+            Class<?> clazz = loadClassUsingContextClassLoader(className, classLoader);
+            if (clazz != null) return clazz;
         }
-        return Class.forName(className);
+        return loadClassWithoutClassLoader(className);
     }
 
     public static boolean hasDefaultNoArgConstructor(String clazzName) {
@@ -116,10 +115,8 @@ public class ReflectionUtils {
 
     public static <T> T newInstanceAndSetFieldValues(Class<T> clazz, Map<String, String> fieldValues) {
         T t = newInstance(clazz);
-        Field[] declaredFields = clazz.getDeclaredFields();
-        for (Field field : declaredFields) {
-            setFieldUsingAutoboxing(field, t, fieldValues.get(field.getName()));
-        }
+        fieldValues.forEach((key, value) -> findField(clazz, key)
+                .ifPresent(f -> setFieldUsingAutoboxing(f, t, value)));
         return t;
     }
 
@@ -141,6 +138,12 @@ public class ReflectionUtils {
         return declaredConstructor.newInstance(params);
     }
 
+    public static <T> T newInstanceCE(Class<T> clazz) throws ReflectiveOperationException {
+        Constructor<T> defaultConstructor = clazz.getDeclaredConstructor();
+        makeAccessible(defaultConstructor);
+        return defaultConstructor.newInstance();
+    }
+
     public static <T> T newInstance(Class<T> clazz) {
         try {
             Constructor<T> defaultConstructor = clazz.getDeclaredConstructor();
@@ -156,28 +159,36 @@ public class ReflectionUtils {
                 .orElseThrow(() -> new JobNotFoundException(clazz, methodName, parameterTypes));
     }
 
+    public static Optional<Method> findMethod(String className, String methodName, String... parameterTypeNames) {
+        try {
+            return findMethod(toClass(className), methodName, Stream.of(parameterTypeNames).map(ReflectionUtils::toClass).toArray(Class[]::new));
+        } catch (IllegalArgumentException e) {
+            return Optional.empty();
+        }
+    }
+
     public static Optional<Method> findMethod(Object object, String methodName, Class<?>... parameterTypes) {
-        return findMethod(object.getClass(), new MethodFinderPredicate(methodName, parameterTypes));
+        return findMethod(object.getClass(), methodName, parameterTypes);
     }
 
     public static Optional<Method> findMethod(Class<?> clazz, String methodName, Class<?>... parameterTypes) {
         return findMethod(clazz, new MethodFinderPredicate(methodName, parameterTypes));
     }
 
-    private static Optional<Method> findMethod(Class<?> clazz, MethodFinderPredicate predicate) {
+    public static Optional<Method> findMethod(Class<?> clazz, Predicate<Method> predicate) {
         final Optional<Method> optionalMethod = stream(clazz.getDeclaredMethods())
                 .filter(predicate)
                 .findFirst();
         if (optionalMethod.isPresent()) {
             return optionalMethod;
-        } else if (clazz.isInterface()) {
+        } else if (!clazz.isInterface() && !Object.class.equals(clazz.getSuperclass())) {
+            return findMethod(clazz.getSuperclass(), predicate);
+        } else if (clazz.getInterfaces().length > 0) {
             return Stream.of(clazz.getInterfaces())
                     .map(superInterface -> findMethod(superInterface, predicate))
                     .filter(Optional::isPresent)
                     .findFirst()
                     .orElse(Optional.empty());
-        } else if (!Object.class.equals(clazz.getSuperclass())) {
-            return findMethod(clazz.getSuperclass(), predicate);
         } else {
             return Optional.empty();
         }
@@ -279,13 +290,31 @@ public class ReflectionUtils {
     }
 
     public static void makeAccessible(AccessibleObject accessibleObject) {
-        AccessController.doPrivileged((PrivilegedAction<Void>) () -> {
-            accessibleObject.setAccessible(true);
-            return null;
-        });
+        accessibleObject.setAccessible(true);
     }
 
-    private static <T> Constructor<T> getConstructorForArgs(Class<T> clazz, Class<?>[] args) {
+    private static Class<?> loadClassWithoutClassLoader(String className) throws ClassNotFoundException {
+        try {
+            LOGGER.trace("Attempting to load class '{}' without ClassLoader (ClassLoader of calling class or system ClassLoader)", className);
+            return Class.forName(className);
+        } catch (ClassNotFoundException e) {
+            LOGGER.trace("Failed to load class '{}' without ClassLoader (ClassLoader of calling class or system ClassLoader)", className);
+            throw e;
+        }
+    }
+
+    private static Class<?> loadClassUsingContextClassLoader(String className, ClassLoader classLoader) {
+        try {
+            LOGGER.trace("Attempting to load class '{}' using ClassLoader '{}' (currentThread().getContextClassLoader())", className, classLoader);
+            return Class.forName(className, true, classLoader);
+        } catch (ClassNotFoundException e) {
+            // support for Spring Boot Executable jar. See https://github.com/jobrunr/jobrunr/issues/81
+            LOGGER.trace("Failed to load class '{}' using ClassLoader '{}' (currentThread().getContextClassLoader())", className, classLoader);
+        }
+        return null;
+    }
+
+    private static <T> Constructor<T> getConstructorForArgs(Class<T> clazz, Class<?>[] args) throws NoSuchMethodException {
         Constructor<?>[] constructors = clazz.getConstructors();
 
         for (Constructor<?> constructor : constructors) {
@@ -302,11 +331,12 @@ public class ReflectionUtils {
                 if (argumentsMatch) return cast(constructor);
             }
         }
-        throw new JobNotFoundException(clazz, "<init>", args);
+
+        return clazz.getConstructor(args);
     }
 
     /**
-     * Why: less warnings and @SuppressWarnings("unchecked")
+     * Why: fewer warnings and @SuppressWarnings("unchecked")
      */
     @SuppressWarnings("unchecked")
     private static <T> Class<T> cast(Class<?> aClass) {
@@ -314,9 +344,9 @@ public class ReflectionUtils {
     }
 
     /**
-     * Why: less warnings and @SuppressWarnings("unchecked")
+     * Why: fewer warnings and @SuppressWarnings("unchecked")
      */
-    @SuppressWarnings("unchecked")
+    @SuppressWarnings({"unchecked"})
     public static <T> T cast(Object anObject) {
         return (T) anObject;
     }

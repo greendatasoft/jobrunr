@@ -2,7 +2,6 @@ package org.jobrunr.storage.sql.sqlserver;
 
 import org.jobrunr.storage.StorageProviderUtils.DatabaseOptions;
 import org.jobrunr.storage.sql.common.DefaultSqlStorageProvider;
-import org.jobrunr.storage.sql.common.db.dialect.SQLServerDialect;
 
 import javax.sql.DataSource;
 
@@ -17,7 +16,7 @@ public class SQLServerStorageProvider extends DefaultSqlStorageProvider {
     }
 
     public SQLServerStorageProvider(DataSource dataSource, DatabaseOptions databaseOptions) {
-        super(dataSource, new SQLServerDialect(), databaseOptions);
+        this(dataSource, null, databaseOptions);
     }
 
     public SQLServerStorageProvider(DataSource dataSource, String tablePrefix, DatabaseOptions databaseOptions) {

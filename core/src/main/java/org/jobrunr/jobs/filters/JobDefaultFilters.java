@@ -27,8 +27,8 @@ public class JobDefaultFilters {
         return filters;
     }
 
-    private ArrayList<JobFilter> getAllJobFilters(List<JobFilter> jobFilters) {
-        final ArrayList<JobFilter> result = new ArrayList<>(Arrays.asList(new DisplayNameFilter(), new RetryFilter()));
+    private List<JobFilter> getAllJobFilters(List<JobFilter> jobFilters) {
+        final ArrayList<JobFilter> result = new ArrayList<>(Arrays.asList(new DefaultJobFilter(), new RetryFilter()));
         result.addAll(jobFilters);
         return result;
     }

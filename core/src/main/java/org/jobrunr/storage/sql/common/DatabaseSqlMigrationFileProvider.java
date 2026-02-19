@@ -9,6 +9,7 @@ import org.jobrunr.storage.sql.common.tables.TablePrefixStatementUpdater;
 import org.jobrunr.storage.sql.db2.DB2StorageProvider;
 import org.jobrunr.storage.sql.h2.H2StorageProvider;
 import org.jobrunr.storage.sql.mariadb.MariaDbStorageProvider;
+import org.jobrunr.storage.sql.mysql.MySqlStorageProvider;
 import org.jobrunr.storage.sql.oracle.OracleStorageProvider;
 import org.jobrunr.storage.sql.postgres.PostgresStorageProvider;
 import org.jobrunr.storage.sql.sqlite.SqLiteStorageProvider;
@@ -20,26 +21,24 @@ import java.io.StringWriter;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
-import java.util.HashMap;
 import java.util.Map;
 
+import static org.jobrunr.utils.CollectionUtils.mapOf;
 import static org.jobrunr.utils.StringUtils.isNullOrEmpty;
 
 public class DatabaseSqlMigrationFileProvider {
-
-    private static Map<String, Class<? extends SqlStorageProvider>> databaseTypes  = new HashMap<String, Class<? extends SqlStorageProvider>>() {{
-        put("db2", DB2StorageProvider.class);
-        put("h2", H2StorageProvider.class);
-        put("mariadb", MariaDbStorageProvider.class);
-        put("mysql", MariaDbStorageProvider.class);
-        put("oracle", OracleStorageProvider.class);
-        put("postgres", PostgresStorageProvider.class);
-        put("sqlite", SqLiteStorageProvider.class);
-        put("sqlserver", SQLServerStorageProvider.class);
-    }};
+    private static final Map<String, Class<? extends SqlStorageProvider>> databaseTypes = mapOf(
+            "db2", DB2StorageProvider.class,
+            "h2", H2StorageProvider.class,
+            "mariadb", MariaDbStorageProvider.class,
+            "mysql", MySqlStorageProvider.class,
+            "oracle", OracleStorageProvider.class,
+            "postgres", PostgresStorageProvider.class,
+            "sqlite", SqLiteStorageProvider.class,
+            "sqlserver", SQLServerStorageProvider.class);
 
     public static void main(String[] args) {
-        if(args.length < 1 || !databaseTypes.containsKey(args[0].toLowerCase())) {
+        if (args.length < 1 || !databaseTypes.containsKey(args[0].toLowerCase())) {
             System.out.println("Error: insufficient arguments");
             System.out.println();
             System.out.println("usage: java -cp jobrunr-${jobrunr.version}.jar org.jobrunr.storage.sql.common.DatabaseSqlMigrationFileProvider {databaseType} ({tablePrefix})");
@@ -71,7 +70,7 @@ public class DatabaseSqlMigrationFileProvider {
         try {
             final StringBuilder result = new StringBuilder();
             final String sql = migration.getMigrationSql();
-            for (String statement : sql.split(";")) {
+            for (String statement : sql.split(";", 0)) {
                 result.append(statementUpdater.updateStatement(statement)).append(";");
             }
             Files.write(Paths.get("./" + migration.getFileName()), result.toString().getBytes(StandardCharsets.UTF_8));

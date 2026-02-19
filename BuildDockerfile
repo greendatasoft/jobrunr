@@ -1,0 +1,37 @@
+# build stage for Maven
+FROM maven:3.9.11-eclipse-temurin-25 AS maven-dist
+# build stage for Gradle
+FROM gradle:9.2.0-jdk25 AS gradle-dist
+# Main build stage
+FROM eclipse-temurin:25-jdk@sha256:3a35a62d3ece346cfde11b08fafdc3f99d3946d31d5ebc15d678b44a67c3b9ec
+
+ARG NODE_VERSION=24.11.1
+
+RUN apt-get update
+RUN apt-get install -y software-properties-common git ca-certificates curl gnupg lsb-release docker.io
+SHELL ["/bin/bash", "--login", "-i", "-c"]
+RUN curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+RUN source /root/.bashrc
+RUN nvm install $NODE_VERSION
+RUN npm -v
+RUN ln -s /root/.nvm/versions/node/v$NODE_VERSION/bin/npm /usr/bin/npm
+RUN ln -s /root/.nvm/versions/node/v$NODE_VERSION/bin/node /usr/bin/node
+RUN ln -s /root/.nvm/versions/node/v$NODE_VERSION/bin/npx /usr/bin/npx
+
+# Playwright support
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN npx -y playwright@1.57.0 install-deps
+RUN npx -y playwright@1.57.0 install chromium firefox webkit
+RUN chmod -R a+rX /ms-playwright
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+
+# disable SVE so ld-linux on arm64 doesn't segfault
+ENV JAVA_TOOL_OPTIONS="-XX:UseSVE=0"
+
+# copy Maven and Gradle
+COPY --from=maven-dist /usr/share/maven /usr/share/maven
+COPY --from=gradle-dist /opt/gradle /opt/gradle
+
+ENV MAVEN_HOME=/usr/share/maven
+ENV GRADLE_HOME=/opt/gradle
+ENV PATH=${MAVEN_HOME}/bin:${GRADLE_HOME}/bin:$PATH

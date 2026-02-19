@@ -4,22 +4,29 @@ import org.assertj.core.api.AbstractAssert;
 import org.assertj.core.api.Assertions;
 import org.assertj.core.api.Condition;
 import org.assertj.core.data.TemporalOffset;
+import org.jobrunr.JobRunrAssertions;
 import org.jobrunr.jobs.context.JobDashboardLogger;
 import org.jobrunr.jobs.context.JobDashboardProgressBar;
+import org.jobrunr.jobs.states.CarbonAwareAwaitingState;
 import org.jobrunr.jobs.states.JobState;
+import org.jobrunr.jobs.states.SchedulableState;
+import org.jobrunr.jobs.states.ScheduledState;
 import org.jobrunr.jobs.states.StateName;
+import org.jobrunr.scheduling.carbonaware.CarbonAwarePeriod;
 
 import java.time.Instant;
 import java.time.temporal.Temporal;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 import static org.assertj.core.condition.AnyOf.anyOf;
 
 public class JobAssert extends AbstractAssert<JobAssert, Job> {
 
-    private JobAssert(Job job) {
+    public JobAssert(Job job) {
         super(job, JobAssert.class);
     }
 
@@ -27,8 +34,29 @@ public class JobAssert extends AbstractAssert<JobAssert, Job> {
         return new JobAssert(job);
     }
 
+    public JobAssert hasId() {
+        Assertions.assertThat(actual.getId()).isNotNull();
+        return this;
+    }
+
+
+    public JobAssert hasId(UUID id) {
+        Assertions.assertThat(actual.getId())
+                .isNotNull()
+                .isEqualTo(id);
+        return this;
+    }
+
     public JobAssert hasJobName(String name) {
         Assertions.assertThat(actual.getJobName()).isEqualTo(name);
+        return this;
+    }
+
+    public JobAssert hasJobDetails(Class<?> clazz, String methodName, Object... args) {
+        JobRunrAssertions.assertThat(actual.getJobDetails())
+                .hasClass(clazz)
+                .hasMethodName(methodName)
+                .hasArgs(args);
         return this;
     }
 
@@ -58,19 +86,33 @@ public class JobAssert extends AbstractAssert<JobAssert, Job> {
         return this;
     }
 
-    public JobAssert hasMetadata(String key, String value) {
+    public JobAssert isAwaitingWithPeriod(CarbonAwarePeriod period) {
+        Assertions.assertThat((CarbonAwareAwaitingState) actual.getJobState()).isInstanceOf(CarbonAwareAwaitingState.class);
+        CarbonAwareAwaitingState carbonAwareAwaitingState = actual.getJobState();
+        Assertions.assertThat(carbonAwareAwaitingState.getFrom()).isEqualTo(period.getFrom());
+        Assertions.assertThat(carbonAwareAwaitingState.getTo()).isEqualTo(period.getTo());
+        return this;
+    }
+
+
+    public JobAssert hasMetadata(String key) {
+        Assertions.assertThat(actual.getMetadata()).containsKey(key);
+        return this;
+    }
+
+    public JobAssert hasMetadata(String key, Object value) {
         Assertions.assertThat(actual.getMetadata()).containsEntry(key, value);
         return this;
     }
 
-    public JobAssert hasMetadata(Condition condition) {
+    public JobAssert hasMetadata(Condition<Map<String, Object>> condition) {
         Assertions.assertThat(actual.getMetadata()).has(condition);
         return this;
     }
 
     public JobAssert hasMetadataOnlyContainingJobProgressAndLogging() {
         for (String key : actual.getMetadata().keySet()) {
-            if(!(key.startsWith(JobDashboardLogger.JOBRUNR_LOG_KEY) || key.startsWith(JobDashboardProgressBar.JOBRUNR_PROGRESSBAR_KEY))) {
+            if (!(key.startsWith(JobDashboardLogger.JOBRUNR_LOG_KEY) || key.startsWith(JobDashboardProgressBar.JOBRUNR_PROGRESSBAR_KEY))) {
                 throw new AssertionError("Job has metadata key '" + key + "' which is not allowed");
             }
         }
@@ -87,6 +129,16 @@ public class JobAssert extends AbstractAssert<JobAssert, Job> {
         return this;
     }
 
+    public JobAssert hasAmountOfRetries(int amountOfRetries) {
+        Assertions.assertThat(actual.getAmountOfRetries()).isEqualTo(amountOfRetries);
+        return this;
+    }
+
+    public JobAssert hasLabels(List<String> labels) {
+        Assertions.assertThat(actual.getLabels()).isEqualTo(labels);
+        return this;
+    }
+
     public JobAssert hasRecurringJobId(String recurringJobId) {
         Assertions.assertThat(actual.getRecurringJobId())
                 .isPresent()
@@ -94,11 +146,28 @@ public class JobAssert extends AbstractAssert<JobAssert, Job> {
         return this;
     }
 
+    public JobAssert hasScheduledAt(Instant scheduledAt) {
+        SchedulableState scheduledState = actual.getJobState();
+        Assertions.assertThat(scheduledState.getScheduledAt()).isEqualTo(scheduledAt);
+        return this;
+    }
+
+    public JobAssert hasScheduledAt(Instant scheduledAt, String reason) {
+        ScheduledState scheduledState = actual.getJobState();
+        Assertions.assertThat(scheduledState.getScheduledAt()).isEqualTo(scheduledAt);
+        Assertions.assertThat(scheduledState.getReason()).isEqualTo(reason);
+        return this;
+    }
+
     public JobAssert isEqualTo(Job otherJob) {
+        return isEqualTo(otherJob, "locker", "newState", "jobHistory.exception", "stateIndexBeforeStateChange");
+    }
+
+    public JobAssert isEqualTo(Job otherJob, String... fieldNamesToIgnore) {
         Assertions.assertThat(actual)
                 .usingRecursiveComparison()
                 .usingOverriddenEquals()
-                .ignoringFields("locker")
+                .ignoringFields(fieldNamesToIgnore)
                 .isEqualTo(otherJob);
         return this;
     }
@@ -106,7 +175,7 @@ public class JobAssert extends AbstractAssert<JobAssert, Job> {
 
     private static class JobStateCondition extends Condition<Job> {
 
-        public JobStateCondition(StateName stateName) {
+        JobStateCondition(StateName stateName) {
             super(job -> job.hasState(stateName), "Job should have state %s", stateName);
         }
     }

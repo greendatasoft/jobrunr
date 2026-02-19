@@ -61,6 +61,10 @@ public class JobDashboardLogger {
             this.logLines = new ConcurrentLinkedQueue<>();
         }
 
+        public JobDashboardLogLines(ConcurrentLinkedQueue<JobDashboardLogLine> logLines) {
+            this.logLines = logLines;
+        }
+
         public void add(JobDashboardLogLine line) {
             logLines.add(line);
         }
@@ -83,6 +87,12 @@ public class JobDashboardLogger {
         public JobDashboardLogLine(Level level, String logMessage) {
             this.level = level;
             this.logInstant = Instant.now();
+            this.logMessage = logMessage;
+        }
+
+        public JobDashboardLogLine(Level level, Instant logInstant, String logMessage) {
+            this.level = level;
+            this.logInstant = logInstant;
             this.logMessage = logMessage;
         }
 

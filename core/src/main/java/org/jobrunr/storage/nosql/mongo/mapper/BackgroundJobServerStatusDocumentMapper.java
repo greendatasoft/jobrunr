@@ -6,7 +6,21 @@ import org.jobrunr.storage.BackgroundJobServerStatus;
 import java.time.Duration;
 import java.util.Date;
 
-import static org.jobrunr.storage.StorageProviderUtils.BackgroundJobServers.*;
+import static org.jobrunr.storage.StorageProviderUtils.BackgroundJobServers.FIELD_DELETE_DELETED_JOBS_AFTER;
+import static org.jobrunr.storage.StorageProviderUtils.BackgroundJobServers.FIELD_DELETE_SUCCEEDED_JOBS_AFTER;
+import static org.jobrunr.storage.StorageProviderUtils.BackgroundJobServers.FIELD_FIRST_HEARTBEAT;
+import static org.jobrunr.storage.StorageProviderUtils.BackgroundJobServers.FIELD_IS_RUNNING;
+import static org.jobrunr.storage.StorageProviderUtils.BackgroundJobServers.FIELD_LAST_HEARTBEAT;
+import static org.jobrunr.storage.StorageProviderUtils.BackgroundJobServers.FIELD_NAME;
+import static org.jobrunr.storage.StorageProviderUtils.BackgroundJobServers.FIELD_POLL_INTERVAL_IN_SECONDS;
+import static org.jobrunr.storage.StorageProviderUtils.BackgroundJobServers.FIELD_PROCESS_ALLOCATED_MEMORY;
+import static org.jobrunr.storage.StorageProviderUtils.BackgroundJobServers.FIELD_PROCESS_CPU_LOAD;
+import static org.jobrunr.storage.StorageProviderUtils.BackgroundJobServers.FIELD_PROCESS_FREE_MEMORY;
+import static org.jobrunr.storage.StorageProviderUtils.BackgroundJobServers.FIELD_PROCESS_MAX_MEMORY;
+import static org.jobrunr.storage.StorageProviderUtils.BackgroundJobServers.FIELD_SYSTEM_CPU_LOAD;
+import static org.jobrunr.storage.StorageProviderUtils.BackgroundJobServers.FIELD_SYSTEM_FREE_MEMORY;
+import static org.jobrunr.storage.StorageProviderUtils.BackgroundJobServers.FIELD_SYSTEM_TOTAL_MEMORY;
+import static org.jobrunr.storage.StorageProviderUtils.BackgroundJobServers.FIELD_WORKER_POOL_SIZE;
 import static org.jobrunr.storage.nosql.mongo.MongoUtils.getIdAsUUID;
 
 public class BackgroundJobServerStatusDocumentMapper {
@@ -14,6 +28,7 @@ public class BackgroundJobServerStatusDocumentMapper {
     public Document toInsertDocument(BackgroundJobServerStatus serverStatus) {
         final Document document = new Document();
         document.put("_id", serverStatus.getId());
+        document.put(FIELD_NAME, serverStatus.getName());
         document.put(FIELD_WORKER_POOL_SIZE, serverStatus.getWorkerPoolSize());
         document.put(FIELD_POLL_INTERVAL_IN_SECONDS, serverStatus.getPollIntervalInSeconds());
         document.put(FIELD_DELETE_SUCCEEDED_JOBS_AFTER, serverStatus.getDeleteSucceededJobsAfter().toString());
@@ -47,6 +62,7 @@ public class BackgroundJobServerStatusDocumentMapper {
 
         return new BackgroundJobServerStatus(
                 getIdAsUUID(document),
+                document.getString(FIELD_NAME),
                 document.getInteger(FIELD_WORKER_POOL_SIZE),
                 document.getInteger(FIELD_POLL_INTERVAL_IN_SECONDS),
                 Duration.parse(document.getString(FIELD_DELETE_SUCCEEDED_JOBS_AFTER)),

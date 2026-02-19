@@ -19,10 +19,11 @@ public class ProblemsManager {
 
     private Map<String, ProblemHandler> initProblemHandlers() {
         Map<String, ProblemHandler> result = new HashMap<>();
+        result.put(CarbonIntensityApiErrorProblem.PROBLEM_TYPE, new CarbonIntensityApiErrorProblemHandler(problems, storageProvider));
         result.put(ScheduledJobsNotFoundProblem.PROBLEM_TYPE, new ScheduledJobsNotFoundProblemHandler(problems, storageProvider));
         result.put(SevereJobRunrExceptionProblem.PROBLEM_TYPE, new SevereJobRunrExceptionProblemHandler(problems, storageProvider));
         result.put(CpuAllocationIrregularityProblem.PROBLEM_TYPE, new CpuAllocationIrregularityProblemHandler(problems, storageProvider));
-        result.put(NewJobRunrVersionProblem.PROBLEM_TYPE, new NewJobRunrVersionProblemHandler(problems, storageProvider));
+        result.put(PollIntervalInSecondsTimeBoxIsTooSmallProblem.PROBLEM_TYPE, new PollIntervalInSecondsTimeBoxIsTooSmallProblemHandler(problems, storageProvider));
         return result;
     }
 

@@ -1,0 +1,21 @@
+[
+  {
+    "@class": "${json-unit.ignore-element}",
+    "id": "${json-unit.ignore}",
+    "name": "${json-unit.ignore}",
+    "workerPoolSize": 10,
+    "pollIntervalInSeconds": 15,
+    "deleteSucceededJobsAfter": 129600.000000000,
+    "permanentlyDeleteDeletedJobsAfter": 259200.000000000,
+    "firstHeartbeat": "${json-unit.ignore}",
+    "lastHeartbeat": "${json-unit.ignore}",
+    "running": true,
+    "systemTotalMemory": "${json-unit.ignore}",
+    "systemFreeMemory": "${json-unit.ignore}",
+    "systemCpuLoad": "${json-unit.ignore}",
+    "processMaxMemory": "${json-unit.ignore}",
+    "processFreeMemory": "${json-unit.ignore}",
+    "processAllocatedMemory": "${json-unit.ignore}",
+    "processCpuLoad": "${json-unit.ignore}"
+  }
+]

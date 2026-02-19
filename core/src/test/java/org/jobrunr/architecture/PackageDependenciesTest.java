@@ -8,13 +8,30 @@ import com.tngtech.archunit.junit.ArchTest;
 import com.tngtech.archunit.lang.ArchRule;
 import org.jobrunr.JobRunrException;
 import org.jobrunr.architecture.PackageDependenciesTest.DoNotIncludeTestFixtures;
-import org.jobrunr.server.BackgroundJobPerformer;
+import org.jobrunr.jobs.AbstractJob;
+import org.jobrunr.scheduling.Schedule;
+import org.jobrunr.scheduling.carbonaware.CarbonAwareScheduleMargin;
+import org.jobrunr.scheduling.exceptions.JobNotFoundException;
+import org.jobrunr.server.BackgroundJobServer;
+import org.jobrunr.server.BackgroundJobServerConfiguration;
+import org.jobrunr.server.Java11OrHigherInternalDesktopUtil;
 import org.jobrunr.server.dashboard.DashboardNotification;
+import org.jobrunr.utils.annotations.LockingJob;
 import org.jobrunr.utils.reflection.autobox.InstantForOracleTypeAutoboxer;
+import org.slf4j.Logger;
 
-import static com.tngtech.archunit.core.domain.JavaClass.Predicates.*;
+import static com.tngtech.archunit.base.DescribedPredicate.not;
+import static com.tngtech.archunit.core.domain.JavaCall.Predicates.target;
+import static com.tngtech.archunit.core.domain.JavaClass.Predicates.assignableFrom;
+import static com.tngtech.archunit.core.domain.JavaClass.Predicates.assignableTo;
+import static com.tngtech.archunit.core.domain.JavaClass.Predicates.equivalentTo;
+import static com.tngtech.archunit.core.domain.JavaClass.Predicates.resideInAnyPackage;
+import static com.tngtech.archunit.core.domain.properties.CanBeAnnotated.Predicates.annotatedWith;
+import static com.tngtech.archunit.core.domain.properties.HasName.Predicates.nameStartingWith;
+import static com.tngtech.archunit.core.domain.properties.HasOwner.Predicates.With.owner;
 import static com.tngtech.archunit.lang.conditions.ArchPredicates.are;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes;
+import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.methods;
 import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 
 @AnalyzeClasses(packages = "org.jobrunr", importOptions = {DoNotIncludeTests.class, DoNotIncludeTestFixtures.class})
@@ -26,6 +43,11 @@ class PackageDependenciesTest {
             return !location.toString().contains("test-fixtures");
         }
     }
+
+    @ArchTest
+    ArchRule jobRunrJobLockingTest = methods()
+            .that().areDeclaredIn(AbstractJob.class).and().haveName("lock")
+            .should().onlyBeCalled().byMethodsThat(annotatedWith(LockingJob.class));
 
     @ArchTest
     ArchRule jobRunrDependenciesTest = classes()
@@ -64,20 +86,26 @@ class PackageDependenciesTest {
 
     @ArchTest
     ArchRule jobRunrSchedulingClassesDependenciesTest = classes()
-                .that().resideInAPackage("org.jobrunr.scheduling..")
-                .should().onlyDependOnClassesThat().resideInAnyPackage("org.jobrunr..", "org.slf4j..", "java..");
+            .that().resideInAPackage("org.jobrunr.scheduling..")
+            .should().onlyDependOnClassesThat().resideInAnyPackage("org.jobrunr..", "org.slf4j..", "java..");
 
     @ArchTest
     ArchRule jobSchedulingClassesShouldNotDependOnServerClasses = noClasses()
-                .that().resideInAPackage("org.jobrunr.scheduling..")
-                .should().dependOnClassesThat().resideInAnyPackage("org.jobrunr.server..");
+            .that().resideInAPackage("org.jobrunr.scheduling..")
+            .should().dependOnClassesThat().resideInAnyPackage("org.jobrunr.server..");
 
     @ArchTest
     ArchRule jobRunrServerClassesDependenciesTest = classes()
-                .that().resideInAPackage("org.jobrunr.server..")
-                .and().resideOutsideOfPackage("org.jobrunr.server.jmx..")
-                .and().resideOutsideOfPackage("org.jobrunr.server.metrics..")
-                    .should().onlyDependOnClassesThat().resideInAnyPackage("org.jobrunr..", "org.slf4j..", "java..");
+            .that().resideInAPackage("org.jobrunr.server..")
+            .and().resideOutsideOfPackage("org.jobrunr.server.jmx..")
+            .and().resideOutsideOfPackage("org.jobrunr.server.metrics..")
+            .should().onlyDependOnClassesThat().resideInAnyPackage("org.jobrunr..", "org.slf4j..", "java..");
+
+    @ArchTest
+    ArchRule jobRunrServerClassesShouldNotDependOnJavaAwtDependenciesTest = noClasses()
+            .that().resideInAPackage("org.jobrunr.server..")
+            .and().doNotHaveFullyQualifiedName(Java11OrHigherInternalDesktopUtil.class.getName())
+            .should().dependOnClassesThat().resideInAPackage("java.awt..");
 
     @ArchTest
     ArchRule jobRunrServerJmxClassesDependenciesTest = classes()
@@ -86,8 +114,12 @@ class PackageDependenciesTest {
 
     @ArchTest
     ArchRule jobServerClassesShouldNotDependOnSchedulingClasses = noClasses()
-            .that().resideInAPackage("org.jobrunr.server..").and().areNotAssignableFrom(BackgroundJobPerformer.class)
-            .should().dependOnClassesThat().resideInAnyPackage("org.jobrunr.scheduling..");
+            .that().resideInAPackage("org.jobrunr.server..")
+            .should().dependOnClassesThat(
+                    resideInAnyPackage("org.jobrunr.scheduling..")
+                            .and(not(assignableTo(JobNotFoundException.class)))
+                            .and(not(assignableTo(Schedule.class)))
+                            .and(not(assignableTo(CarbonAwareScheduleMargin.class))));
 
     @ArchTest
     ArchRule jobServerClassesShouldNotDependOnDashboardClasses = noClasses()
@@ -97,61 +129,53 @@ class PackageDependenciesTest {
     @ArchTest
     ArchRule jobRunrStorageClassesDependenciesTest = classes()
             .that().resideInAPackage("org.jobrunr.storage")
-            .should().onlyDependOnClassesThat().resideInAnyPackage("org.jobrunr.jobs..", "org.jobrunr.storage..", "org.jobrunr.utils..", "org.jobrunr.server.jmx..", "org.slf4j..", "java..");
-
-    @ArchTest
-    ArchRule jobRunrStorageElasticSearchClassesDependenciesTest = classes()
-            .that().resideInAPackage("org.jobrunr.storage.nosql.elasticsearch..")
             .should().onlyDependOnClassesThat(
-                    resideInAnyPackage("org.jobrunr.jobs..", "org.jobrunr.storage..", "org.jobrunr.utils..", "org.elasticsearch..", "org.apache.http..", "org.slf4j..", "java..")
-                            .or(are(equivalentTo(JobRunrException.class)))
-            );
+                    resideInAnyPackage("org.jobrunr.jobs..", "org.jobrunr.storage..", "org.jobrunr.utils..", "org.jobrunr.server.jmx..", "org.slf4j..", "java..")
+                            .or(assignableFrom(BackgroundJobServer.class))
+                            .or(assignableFrom(BackgroundJobServerConfiguration.class)));
+
 
     @ArchTest
     ArchRule jobRunrStorageMongoClassesDependenciesTest = classes()
             .that().resideInAPackage("org.jobrunr.storage.nosql.mongo..")
-                .should().onlyDependOnClassesThat(
-                        resideInAnyPackage("org.jobrunr.jobs..", "org.jobrunr.storage..", "org.jobrunr.utils..", "com.mongodb..", "org.bson..", "org.slf4j..", "java..", "")
-                                .or(are(equivalentTo(JobRunrException.class)))
-                ); // see https://github.com/TNG/ArchUnit/issues/519
-
-    @ArchTest
-    ArchRule jobRunrStorageRedisJedisClassesDependenciesTest = classes()
-            .that().resideInAPackage("org.jobrunr.storage.nosql.redis..")
-            .and().haveSimpleNameStartingWith("Jedis")
-            .should().onlyDependOnClassesThat().resideInAnyPackage("org.jobrunr.jobs..", "org.jobrunr.storage..", "org.jobrunr.utils..", "redis.clients..", "org.slf4j..", "java..");
-
-    @ArchTest
-    ArchRule jobRunrStorageRedisLettuceClassesDependenciesTest = classes()
-            .that().resideInAPackage("org.jobrunr.storage.nosql.redis..")
-                .and().haveSimpleNameStartingWith("Lettuce")
-                .should().onlyDependOnClassesThat().resideInAnyPackage("org.jobrunr.jobs..", "org.jobrunr.storage..", "org.jobrunr.utils..", "io.lettuce..", "org.apache.commons.pool2..", "org.slf4j..", "java..");
+            .should().onlyDependOnClassesThat(
+                    resideInAnyPackage("org.jobrunr.jobs..", "org.jobrunr.storage..", "org.jobrunr.utils..", "com.mongodb..", "org.bson..", "org.slf4j..", "java..", "")
+                            .or(are(equivalentTo(JobRunrException.class)))
+                            .or(assignableFrom(BackgroundJobServer.class))
+            ); // see https://github.com/TNG/ArchUnit/issues/519
 
     @ArchTest
     ArchRule jobRunrStorageSqlClassesDependenciesTest = classes()
-                .that().resideInAnyPackage("org.jobrunr.storage.sql..")
-                .and().resideOutsideOfPackage("org.jobrunr.storage.sql.common..")
-                .should().onlyDependOnClassesThat().resideInAnyPackage("org.jobrunr.jobs..", "org.jobrunr.storage..", "org.jobrunr.utils..", "javax.sql..", "org.slf4j..", "java..");
+            .that().resideInAnyPackage("org.jobrunr.storage.sql..")
+            .and().resideOutsideOfPackage("org.jobrunr.storage.sql.common..")
+            .should().onlyDependOnClassesThat().resideInAnyPackage("org.jobrunr.jobs..", "org.jobrunr.storage..", "org.jobrunr.utils..", "javax.sql..", "org.slf4j..", "java..");
 
     @ArchTest
     ArchRule jobRunrUtilsClassesDependenciesTest = classes()
-                .that().resideInAPackage("org.jobrunr.utils..")
-                .and().resideOutsideOfPackage("org.jobrunr.utils.mapper..")
-                .and().doNotHaveFullyQualifiedName(InstantForOracleTypeAutoboxer.class.getName())
-                .should().onlyDependOnClassesThat().resideInAnyPackage("org.jobrunr..", "org.slf4j..", "java..");
+            .that().resideInAPackage("org.jobrunr.utils..")
+            .and().resideOutsideOfPackage("org.jobrunr.utils.mapper..")
+            .and().doNotHaveFullyQualifiedName(InstantForOracleTypeAutoboxer.class.getName())
+            .should().onlyDependOnClassesThat().resideInAnyPackage("org.jobrunr..", "org.slf4j..", "java..");
 
     @ArchTest
     ArchRule jobRunrUtilsGsonMapperClassesDependenciesTest = classes()
-                .that().resideInAPackage("org.jobrunr.utils.mapper.gson..")
-                .should().onlyDependOnClassesThat().resideInAnyPackage("org.jobrunr..", "com.google.gson..", "java..", "");
+            .that().resideInAPackage("org.jobrunr.utils.mapper.gson..")
+            .should().onlyDependOnClassesThat().resideInAnyPackage("org.jobrunr..", "com.google.gson..", "java..", "");
 
     @ArchTest
     ArchRule jobRunrUtilsJacksonMapperClassesDependenciesTest = classes()
-                .that().resideInAPackage("org.jobrunr.utils.mapper.jackson..")
-                .should().onlyDependOnClassesThat().resideInAnyPackage("org.jobrunr..", "com.fasterxml..", "java..");
+            .that().resideInAPackage("org.jobrunr.utils.mapper.jackson..")
+            .should().onlyDependOnClassesThat().resideInAnyPackage("org.jobrunr..", "com.fasterxml..", "java..");
 
     @ArchTest
     ArchRule jobRunrUtilsJsonBMapperClassesDependenciesTest = classes()
-                .that().resideInAPackage("org.jobrunr.utils.mapper.jsonb..")
-                .should().onlyDependOnClassesThat().resideInAnyPackage("org.jobrunr..", "javax.json..", "java..");
+            .that().resideInAPackage("org.jobrunr.utils.mapper.jsonb..")
+            .should().onlyDependOnClassesThat().resideInAnyPackage("org.jobrunr..", "jakarta.json..", "java..");
+
+    @ArchTest
+    ArchRule noCallToSlf4jV2Api = noClasses()
+            .should()
+            .callMethodWhere(target(nameStartingWith("at"))
+                    .and(target(owner(assignableTo(Logger.class)))))
+            .because("Use of SLF4J 2.x fluent logging break Spring Boot 2 logging system");
 }

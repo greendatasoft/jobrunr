@@ -22,9 +22,9 @@ public class SimpleJobActivator implements JobActivator {
         Object anObject = allServices.get(type);
         if (anObject == null) {
             return allServices.keySet().stream()
-                    .filter(clazz -> type.isAssignableFrom(clazz))
+                    .filter(type::isAssignableFrom)
                     .findFirst()
-                    .map(key -> (T) allServices.get(key))
+                    .map(key -> type.cast(allServices.get(key)))
                     .orElse(null);
         }
         return cast(anObject);

@@ -8,35 +8,39 @@ import org.jobrunr.jobs.details.postprocess.CGLibPostProcessor;
 import org.jobrunr.jobs.details.postprocess.JobDetailsPostProcessor;
 
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.LinkedList;
 import java.util.List;
 
 import static java.util.Collections.singletonList;
+import static org.jobrunr.utils.reflection.ReflectionUtils.classExists;
 
+@SuppressWarnings("NonApiType")
 public abstract class JobDetailsBuilder {
 
     private final LinkedList<AbstractJVMInstruction> instructions;
     private final LinkedList<Object> stack;
     private final List<Object> localVariables;
+    private final List<JobDetailsPostProcessor> jobDetailsPostProcessors;
     private String jobDetailsClassName;
     private String jobDetailsStaticFieldName;
     private String jobDetailsMethodName;
     private List<JobParameter> jobDetailsJobParameters;
-    private List<JobDetailsPostProcessor> jobDetailsPostProcessors;
 
     protected JobDetailsBuilder(List<Object> localVariables) {
         this(localVariables, null, null);
     }
 
+    @SuppressWarnings("JdkObsolete") // we want to keep the linked list here
     protected JobDetailsBuilder(List<Object> localVariables, String className, String methodName) {
         this.instructions = new LinkedList<>();
         this.stack = new LinkedList<>();
         this.localVariables = localVariables;
+        this.jobDetailsPostProcessors = singletonList(new CGLibPostProcessor());
 
         setClassName(className);
         setMethodName(methodName);
         setJobParameters(new ArrayList<>());
-        jobDetailsPostProcessors = singletonList(new CGLibPostProcessor());
     }
 
     public void pushInstructionOnStack(AbstractJVMInstruction jvmInstruction) {
@@ -54,7 +58,7 @@ public abstract class JobDetailsBuilder {
         this.localVariables.add(o);
     }
 
-    public List<AbstractJVMInstruction> getInstructions() {
+    public Deque<AbstractJVMInstruction> getInstructions() {
         return instructions;
     }
 
@@ -62,12 +66,15 @@ public abstract class JobDetailsBuilder {
         return instructions.pollFirst();
     }
 
-    public LinkedList<Object> getStack() {
+    public final LinkedList<Object> getStack() {
         return stack;
     }
 
     public JobDetails getJobDetails() {
         invokeInstructions();
+
+        validateJobDetails();
+
         final JobDetails jobDetails = new JobDetails(jobDetailsClassName, jobDetailsStaticFieldName, jobDetailsMethodName, jobDetailsJobParameters);
         return postProcessJobDetails(jobDetails);
     }
@@ -92,6 +99,15 @@ public abstract class JobDetailsBuilder {
                 instruction.invokeInstructionAndPushOnStack();
                 instruction = pollFirstInstruction();
             }
+        }
+    }
+
+    private void validateJobDetails() {
+        if (jobDetailsMethodName == null) {
+            throw new IllegalStateException("Could not determine method name from lambda bytecode. This should not happen. Please report this as a bug with as much details as you can.");
+        }
+        if (jobDetailsMethodName.endsWith("$default") && classExists("kotlin.KotlinVersion")) {
+            throw new IllegalStateException("Unsupported lambda", new UnsupportedOperationException("You are (probably) using Kotlin default parameter values which is not supported by JobRunr."));
         }
     }
 

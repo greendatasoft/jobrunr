@@ -1,8 +1,16 @@
 package org.jobrunr.server.concurrent;
 
 import org.jobrunr.jobs.Job;
-import org.jobrunr.server.JobZooKeeper;
-import org.jobrunr.server.concurrent.statechanges.*;
+import org.jobrunr.server.BackgroundJobServer;
+import org.jobrunr.server.JobSteward;
+import org.jobrunr.server.concurrent.statechanges.AllowedConcurrentStateChange;
+import org.jobrunr.server.concurrent.statechanges.DeletedWhileAnyOtherConcurrentStateChange;
+import org.jobrunr.server.concurrent.statechanges.JobPerformedOnOtherBackgroundJobServerConcurrentStateChange;
+import org.jobrunr.server.concurrent.statechanges.JobStateChangedWhileProcessingConcurrentStateChange;
+import org.jobrunr.server.concurrent.statechanges.PermanentlyDeletedWhileProcessingConcurrentStateChange;
+import org.jobrunr.server.concurrent.statechanges.ScheduledTooEarlyByJobZooKeeperConcurrentStateChange;
+import org.jobrunr.server.concurrent.statechanges.SucceededWhileAnyOtherConcurrentStateChange;
+import org.jobrunr.server.concurrent.statechanges.SystemSleptConcurrentStateChange;
 import org.jobrunr.storage.ConcurrentJobModificationException;
 import org.jobrunr.storage.JobNotFoundException;
 import org.jobrunr.storage.StorageProvider;
@@ -25,20 +33,21 @@ public class DefaultConcurrentJobModificationResolver implements ConcurrentJobMo
     private final StorageProvider storageProvider;
     private final List<AllowedConcurrentStateChange> allowedConcurrentStateChanges;
 
-    public DefaultConcurrentJobModificationResolver(StorageProvider storageProvider, JobZooKeeper jobZooKeeper) {
-        this.storageProvider = storageProvider;
+    public DefaultConcurrentJobModificationResolver(BackgroundJobServer backgroundJobServer) {
+        this.storageProvider = backgroundJobServer.getStorageProvider();
+        final JobSteward jobSteward = backgroundJobServer.getJobSteward();
         allowedConcurrentStateChanges = Arrays.asList(
-                new PermanentlyDeletedWhileProcessingConcurrentStateChange(jobZooKeeper),
-                new DeletedWhileProcessingConcurrentStateChange(jobZooKeeper),
-                new DeletedWhileSucceededConcurrentStateChange(),
-                new DeletedWhileFailedConcurrentStateChange(),
-                new DeletedWhileEnqueuedConcurrentStateChange(),
-                new DeletedWhileScheduledConcurrentStateChange(),
-                new JobPerformedOnOtherBackgroundJobServerConcurrentStateChange(),
-                new ScheduledTooEarlyByJobZooKeeperConcurrentStateChange(storageProvider)
+                new PermanentlyDeletedWhileProcessingConcurrentStateChange(jobSteward),
+                new DeletedWhileAnyOtherConcurrentStateChange(jobSteward),
+                new JobStateChangedWhileProcessingConcurrentStateChange(jobSteward),
+                new SucceededWhileAnyOtherConcurrentStateChange(jobSteward),
+                new JobPerformedOnOtherBackgroundJobServerConcurrentStateChange(jobSteward),
+                new ScheduledTooEarlyByJobZooKeeperConcurrentStateChange(storageProvider),
+                new SystemSleptConcurrentStateChange()
         );
     }
 
+    @Override
     public void resolve(ConcurrentJobModificationException e) {
         final List<Job> concurrentUpdatedJobs = e.getConcurrentUpdatedJobs();
         final List<ConcurrentJobModificationResolveResult> failedToResolve = concurrentUpdatedJobs
@@ -48,7 +57,7 @@ public class DefaultConcurrentJobModificationResolver implements ConcurrentJobMo
                 .collect(toList());
 
         if (!failedToResolve.isEmpty()) {
-            throw new UnresolvableConcurrentJobModificationException(failedToResolve);
+            throw new UnresolvableConcurrentJobModificationException(failedToResolve, e);
         }
     }
 

@@ -1,25 +1,48 @@
-import React, {useRef, useState} from 'react';
+import {lazy, Suspense, useEffect, useMemo, useRef} from 'react';
 
-import Box from "@material-ui/core/Box";
-import Paper from '@material-ui/core/Paper';
-import Typography from '@material-ui/core/Typography';
-import Chart from "react-apexcharts";
-import ApexCharts from "apexcharts";
-import statsState from "../../../StatsStateContext";
+import Box from "@mui/material/Box";
+import Paper from '@mui/material/Paper';
+import Typography from '@mui/material/Typography';
+import LoadingIndicator from "../../LoadingIndicator";
+import {useJobStats} from "../../../hooks/useJobStats";
+import {useColorScheme} from "@mui/material";
+
+function getArrayWithLimitedLength(length) {
+    const array = [];
+
+    array.push = function () {
+        if (this.length >= length) {
+            this.shift();
+        }
+        return Array.prototype.push.apply(this, arguments);
+    }
+
+    for (let i = 0; i < length; i++) {
+        array.push(0);
+    }
+
+    return array;
+
+}
+
+const ApexChartsModule = import("apexcharts");
+const Chart = lazy(() => import("react-apexcharts"));
 
 const RealtimeGraph = () => {
     const oldStatsRef = useRef({enqueued: 0, failed: 0, succeeded: 0});
     const succeededDataRef = useRef(getArrayWithLimitedLength(200));
     const failedDataRef = useRef(getArrayWithLimitedLength(200));
 
-    const [stats, setStats] = React.useState(statsState.getStats());
-    React.useEffect(() => {
-        statsState.addListener(setStats);
-        return () => statsState.removeListener(setStats);
-    }, [])
+    const [stats, _] = useJobStats();
 
-    const [graphState] = useState({
+    const {mode, systemMode} = useColorScheme();
+    const actualMode = systemMode || mode;
+
+    const graphState = useMemo(() => ({
         options: {
+            theme: {
+                mode: actualMode,
+            },
             chart: {
                 id: "processing-chart",
                 type: 'bar',
@@ -30,7 +53,8 @@ const RealtimeGraph = () => {
                 },
                 toolbar: {
                     show: false
-                }
+                },
+                background: "transparent",
             },
             dataLabels: {
                 enabled: false
@@ -51,9 +75,9 @@ const RealtimeGraph = () => {
             {name: "Failed jobs", data: []},
             {name: "Succeeded jobs", data: []}
         ]
-    });
+    }), [actualMode]);
 
-    React.useEffect(() => {
+    useEffect(() => {
         const oldStats = oldStatsRef.current;
 
         if (!stats.succeeded || stats.succeeded < 1) return;
@@ -70,10 +94,12 @@ const RealtimeGraph = () => {
         if (!isNaN(amountSucceeded) && !isNaN(amountFailed) && amountSucceeded >= 0 && amountFailed >= 0) {
             succeededData.push(amountSucceeded)
             failedData.push(amountFailed)
-            ApexCharts.exec('processing-chart', 'updateSeries', [
-                {data: failedData},
-                {data: succeededData}
-            ])
+            ApexChartsModule.then(({default: ApexCharts}) => {
+                ApexCharts.exec('processing-chart', 'updateSeries', [
+                    {name: "Failed jobs", data: failedData},
+                    {name: "Succeeded jobs", data: succeededData}
+                ])
+            })
         }
         oldStatsRef.current = stats;
     }, [stats]);
@@ -81,36 +107,20 @@ const RealtimeGraph = () => {
     return (
         <div className="row">
             <Box my={3}>
-                <Typography id="title" variant="h5">Realtime graph</Typography>
+                <Typography id="realtime-graph" variant="h5">Realtime graph</Typography>
             </Box>
             <Paper>
-                <Chart
-                    options={graphState.options}
-                    series={graphState.series}
-                    type="bar"
-                    height={500}
-                />
+                <Suspense fallback={<LoadingIndicator/>}>
+                    <Chart
+                        options={graphState.options}
+                        series={graphState.series}
+                        type="bar"
+                        height={500}
+                    />
+                </Suspense>
             </Paper>
         </div>
     );
-
-    function getArrayWithLimitedLength(length) {
-        const array = [];
-
-        array.push = function () {
-            if (this.length >= length) {
-                this.shift();
-            }
-            return Array.prototype.push.apply(this, arguments);
-        }
-
-        for (let i = 0; i < length; i++) {
-            array.push(0);
-        }
-
-        return array;
-
-    }
 };
 
 export default RealtimeGraph;

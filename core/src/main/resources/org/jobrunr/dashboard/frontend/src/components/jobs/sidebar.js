@@ -1,15 +1,15 @@
-import React from 'react';
-import {Link} from "react-router-dom";
-import List from '@material-ui/core/List';
-import ListItem from '@material-ui/core/ListItem';
-import ListItemIcon from '@material-ui/core/ListItemIcon';
-import ListItemText from '@material-ui/core/ListItemText';
-import Chip from '@material-ui/core/Chip';
-import {Schedule} from "@material-ui/icons";
-import {AlertCircleOutline, Check, Cogs, Delete, TimerSand} from "mdi-material-ui";
-import statsState from "../../StatsStateContext";
+import {Link} from "react-router";
+import List from '@mui/material/List';
+import ListItemIcon from '@mui/material/ListItemIcon';
+import ListItemText from '@mui/material/ListItemText';
+import {Schedule} from "@mui/icons-material";
+import {AlertCircleOutline, Check, Cogs, Delete, LockClock, TimerSand} from "mdi-material-ui";
+import {ListItemButton} from "@mui/material";
+import {StatChip} from "../ui/StatChip";
+import {useJobStats} from "../../hooks/useJobStats";
 
 const categories = [
+    {name: "awaiting", state: "AWAITING", label: "Pending", icon: <LockClock/>},
     {name: "scheduled", state: "SCHEDULED", label: "Scheduled", icon: <Schedule/>},
     {name: "enqueued", state: "ENQUEUED", label: "Enqueued", icon: <TimerSand/>},
     {name: "processing", state: "PROCESSING", label: "Processing", icon: <Cogs/>},
@@ -19,22 +19,17 @@ const categories = [
 ];
 
 const Sidebar = () => {
-    const [stats, setStats] = React.useState(statsState.getStats());
-    React.useEffect(() => {
-        statsState.addListener(setStats);
-        return () => statsState.removeListener(setStats);
-    }, [])
+    const [stats, _] = useJobStats();
 
     return (
         <List>
             <List component="div" disablePadding>
                 {categories.map(({name, state, label, icon}) => (
-                    <ListItem id={`${name}-menu-btn`} button key={label} title={label}
-                              component={Link} to={`/dashboard/jobs?state=${state}`}>
+                    <ListItemButton id={`${name}-menu-btn`} key={label} title={label} component={Link} to={`/dashboard/jobs?state=${state}`}>
                         <ListItemIcon>{icon}</ListItemIcon>
                         <ListItemText primary={label}/>
-                        <Chip label={stats[name]}/>
-                    </ListItem>
+                        <StatChip label={stats[name]}/>
+                    </ListItemButton>
                 ))}
             </List>
         </List>

@@ -1,21 +1,34 @@
 package org.jobrunr.storage.sql.common;
 
 import org.jobrunr.storage.JobRunrMetadata;
+import org.jobrunr.storage.navigation.AmountRequest;
+import org.jobrunr.storage.sql.common.db.Dialect;
 import org.jobrunr.storage.sql.common.db.Sql;
 import org.jobrunr.storage.sql.common.db.SqlResultSet;
-import org.jobrunr.storage.sql.common.db.dialect.Dialect;
+import org.jobrunr.storage.sql.common.mapper.SqlAmountRequestMapper;
 
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.util.List;
+import java.util.stream.Stream;
 
 import static java.util.stream.Collectors.toList;
-import static org.jobrunr.storage.StorageProviderUtils.Metadata.*;
+import static org.jobrunr.storage.Paging.AmountBasedList.ascOnUpdatedAt;
+import static org.jobrunr.storage.StorageProviderUtils.Metadata.FIELD_CREATED_AT;
+import static org.jobrunr.storage.StorageProviderUtils.Metadata.FIELD_ID;
+import static org.jobrunr.storage.StorageProviderUtils.Metadata.FIELD_NAME;
+import static org.jobrunr.storage.StorageProviderUtils.Metadata.FIELD_OWNER;
+import static org.jobrunr.storage.StorageProviderUtils.Metadata.FIELD_UPDATED_AT;
+import static org.jobrunr.storage.StorageProviderUtils.Metadata.FIELD_VALUE;
+import static org.jobrunr.utils.CollectionUtils.asSet;
 
 public class MetadataTable extends Sql<JobRunrMetadata> {
 
+    private final SqlAmountRequestMapper amountRequestMapper;
+
     public MetadataTable(Connection connection, Dialect dialect, String tablePrefix) {
+        this.amountRequestMapper = new SqlAmountRequestMapper(dialect, asSet(FIELD_NAME, FIELD_CREATED_AT, FIELD_UPDATED_AT));
         this
                 .using(connection, dialect, tablePrefix, "jobrunr_metadata")
                 .with(FIELD_ID, JobRunrMetadata::getId)
@@ -31,6 +44,11 @@ public class MetadataTable extends Sql<JobRunrMetadata> {
         return this;
     }
 
+    public MetadataTable withName(String name) {
+        with(FIELD_NAME, name);
+        return this;
+    }
+
     public JobRunrMetadata save(JobRunrMetadata metadata) throws SQLException {
         withId(metadata.getId());
 
@@ -43,7 +61,7 @@ public class MetadataTable extends Sql<JobRunrMetadata> {
     }
 
     public JobRunrMetadata get(String name, String owner) {
-        return with(FIELD_NAME, name)
+        return withName(name)
                 .with(FIELD_OWNER, owner)
                 .select("* from jobrunr_metadata where name = :name and owner = :owner")
                 .map(this::toJobRunrMetadata)
@@ -52,9 +70,8 @@ public class MetadataTable extends Sql<JobRunrMetadata> {
     }
 
     public List<JobRunrMetadata> getAll(String name) {
-        return with(FIELD_NAME, name)
-                .withOrderLimitAndOffset("updatedAt ASC", 1000, 0)
-                .select("* from jobrunr_metadata where name = :name")
+        return withName(name)
+                .select("* from jobrunr_metadata where name = :name", ascOnUpdatedAt(1000))
                 .map(this::toJobRunrMetadata)
                 .collect(toList());
     }
@@ -63,12 +80,17 @@ public class MetadataTable extends Sql<JobRunrMetadata> {
         this
                 .with(FIELD_ID, id)
                 .with("amount", amount)
-                .update("jobrunr_metadata set value = cast((cast(cast( value as char(10) ) as decimal(10, 0)) + :amount) as char(10)) where id = :id");
+                .update("jobrunr_metadata set value = cast(round((cast(cast( value as char(10) ) as decimal(10, 0)) + :amount), 0) as char(10)) where id = :id");
     }
 
     public int deleteByName(String name) throws SQLException {
         return with(FIELD_NAME, name)
                 .delete("from jobrunr_metadata where name = :name");
+    }
+
+    public int deleteByNameAndOwner(String name, String owner) throws SQLException {
+        return withId(JobRunrMetadata.toId(name, owner))
+                .delete("from jobrunr_metadata where id = :id");
     }
 
     private JobRunrMetadata toJobRunrMetadata(SqlResultSet resultSet) {
@@ -79,5 +101,9 @@ public class MetadataTable extends Sql<JobRunrMetadata> {
                 resultSet.asInstant(FIELD_CREATED_AT),
                 resultSet.asInstant(FIELD_UPDATED_AT)
         );
+    }
+
+    private Stream<SqlResultSet> select(String statement, AmountRequest amountRequest) {
+        return super.select(statement, amountRequestMapper.mapToSqlQuery(amountRequest, this));
     }
 }

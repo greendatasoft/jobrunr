@@ -5,6 +5,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.jobrunr.jobs.JobTestBuilder.aJobInProgress;
 
@@ -19,23 +20,56 @@ class JobDashboardProgressBarTest {
     }
 
     @Test
-    void canIncreaseByOne() {
-        jobDashboardProgressBar.increaseByOne();
+    void canSetProgress() {
+        jobDashboardProgressBar.setProgress(3);
 
-        assertThat(jobDashboardProgressBar.getProgress()).isEqualTo(10);
+        assertThat(jobDashboardProgressBar.getSucceededAmount()).isEqualTo(3);
+        assertThat(jobDashboardProgressBar.getProgressAsPercentage()).isEqualTo(30);
+        assertThat(jobDashboardProgressBar.getProgressAsRatio()).isEqualTo(0.3);
     }
 
     @Test
-    void canSetValue() {
-        jobDashboardProgressBar.setValue(3);
+    void canIncrementSucceeded() {
+        jobDashboardProgressBar.incrementSucceeded();
 
-        assertThat(jobDashboardProgressBar.getProgress()).isEqualTo(30);
+        assertThat(jobDashboardProgressBar.getSucceededAmount()).isEqualTo(1);
+        assertThat(jobDashboardProgressBar.getFailedAmount()).isEqualTo(0);
+        assertThat(jobDashboardProgressBar.getProgressAsPercentage()).isEqualTo(10);
+        assertThat(jobDashboardProgressBar.getProgressAsRatio()).isEqualTo(0.1);
     }
 
     @Test
-    void canNotConstructProgressBarWithSize0() {
+    void canIncrementFailed() {
+        jobDashboardProgressBar.incrementFailed();
+
+        assertThat(jobDashboardProgressBar.getSucceededAmount()).isEqualTo(0);
+        assertThat(jobDashboardProgressBar.getFailedAmount()).isEqualTo(1);
+        assertThat(jobDashboardProgressBar.getProgressAsPercentage()).isEqualTo(0);
+        assertThat(jobDashboardProgressBar.getProgressAsRatio()).isEqualTo(0);
+    }
+
+    @Test
+    void canConstructProgressBarWithSize0() {
         final Job job = aJobInProgress().build();
-        assertThatThrownBy(() -> new JobDashboardProgressBar(job, 0L)).isInstanceOf(IllegalArgumentException.class);
+
+        JobDashboardProgressBar jobDashboardProgressBar = new JobDashboardProgressBar(job, 0L);
+        assertThat(jobDashboardProgressBar.getTotalAmount()).isEqualTo(0L);
+        assertThat(jobDashboardProgressBar.getSucceededAmount()).isEqualTo(0L);
+        assertThat(jobDashboardProgressBar.getProgressAsPercentage()).isEqualTo(100);
+        assertThat(jobDashboardProgressBar.getProgressAsRatio()).isEqualTo(1);
     }
 
+    @Test
+    void canNotConstructProgressBarWithNegativeSize() {
+        final Job job = aJobInProgress().build();
+        assertThatThrownBy(() -> new JobDashboardProgressBar(job, -10L)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void doesNotThrowExceptionIfNoJobProgressBarIsPresent() {
+        final Job job = aJobInProgress().build();
+        assertThatCode(() -> JobDashboardProgressBar.get(job)).doesNotThrowAnyException();
+
+        assertThat(JobDashboardProgressBar.get(job)).isNull();
+    }
 }

@@ -1,13 +1,25 @@
 package org.jobrunr.jobs.details;
 
+import org.jobrunr.configuration.JobRunr;
 import org.jobrunr.jobs.JobDetails;
-import org.jobrunr.jobs.details.instructions.*;
-import org.objectweb.asm.*;
+import org.jobrunr.jobs.details.instructions.AllJVMInstructions;
+import org.jobrunr.jobs.details.instructions.InvokeDynamicInstruction;
+import org.jobrunr.jobs.details.instructions.LdcInstruction;
+import org.jobrunr.jobs.details.instructions.SingleIntOperandInstruction;
+import org.jobrunr.jobs.details.instructions.VisitFieldInstruction;
+import org.jobrunr.jobs.details.instructions.VisitLocalVariableInstruction;
+import org.jobrunr.jobs.details.instructions.VisitMethodInstruction;
+import org.jobrunr.jobs.details.instructions.VisitTypeInstruction;
+import org.jobrunr.jobs.details.instructions.ZeroOperandInstruction;
+import org.jobrunr.utils.JarUtils;
+import org.objectweb.asm.ClassReader;
+import org.objectweb.asm.ClassVisitor;
+import org.objectweb.asm.Handle;
+import org.objectweb.asm.MethodVisitor;
+import org.objectweb.asm.Opcodes;
 
 import java.io.IOException;
 import java.io.InputStream;
-
-import static org.jobrunr.JobRunrException.shouldNotHappenException;
 
 abstract class AbstractJobDetailsFinder extends ClassVisitor {
 
@@ -84,12 +96,17 @@ abstract class AbstractJobDetailsFinder extends ClassVisitor {
         return jobDetailsBuilder.getJobDetails();
     }
 
-    protected void parse(InputStream inputStream) {
+    protected void parse(InputStream inputStream) throws IOException {
         try {
             ClassReader parser = new ClassReader(inputStream);
             parser.accept(this, ClassReader.SKIP_FRAMES);
-        } catch (IOException e) {
-            throw shouldNotHappenException(e);
+        } catch (IllegalArgumentException e) {
+            if (e.getMessage().startsWith("Unsupported class file")) {
+                String requiredAsmVersion = JarUtils.getManifestAttributeValue(JobRunr.class, "Minimum-ASM-Version");
+                String actualAsmVersion = JarUtils.getVersion(Opcodes.class);
+                throw new IllegalArgumentException("JobRunr needs (and automatically adds) ASM " + requiredAsmVersion + " as a transitive dependency but you have ASM " + actualAsmVersion + " on the classpath.", e);
+            }
+            throw e;
         }
     }
 

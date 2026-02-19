@@ -1,5 +1,6 @@
 package org.jobrunr.scheduling.interval;
 
+import org.jobrunr.scheduling.ScheduleExpressionType;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
@@ -13,15 +14,18 @@ import java.time.format.DateTimeFormatter;
 import java.util.stream.Stream;
 
 import static java.time.ZoneOffset.UTC;
+import static java.time.temporal.ChronoUnit.HOURS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 class IntervalTest {
 
     private static final DateTimeFormatter dateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+    private static final Instant createdAtNotRelevantInstant = Instant.ofEpochSecond(0);
 
     private static final String FIVE_SECONDS = "PT5S";
     private static final String TEN_SECONDS = "PT10S";
+    private static final String TEN_HOURS = "PT10H";
     private static final String FORTY_EIGHT_HOURS = "PT48H";
     private static final String EIGHT_DAYS = "P8D";
 
@@ -29,9 +33,9 @@ class IntervalTest {
     @MethodSource("startInstantDurationAndResultInstant")
     void testInterval(String durationExpression, String baseDateTime, String currentDateTime, String expectedDateTime) {
         try {
-            Instant baseInstant = LocalDateTime.parse(baseDateTime, dateTimeFormatter).toInstant(UTC);
-            Instant currentInstant = LocalDateTime.parse(currentDateTime, dateTimeFormatter).toInstant(UTC);
-            Instant expectedInstant = LocalDateTime.parse(expectedDateTime, dateTimeFormatter).toInstant(UTC);
+            Instant baseInstant = baseDateTime.contains("T") ? Instant.parse(baseDateTime) : LocalDateTime.parse(baseDateTime, dateTimeFormatter).toInstant(UTC);
+            Instant currentInstant = currentDateTime.contains("T") ? Instant.parse(currentDateTime) : LocalDateTime.parse(currentDateTime, dateTimeFormatter).toInstant(UTC);
+            Instant expectedInstant = expectedDateTime.contains("T") ? Instant.parse(expectedDateTime) : LocalDateTime.parse(expectedDateTime, dateTimeFormatter).toInstant(UTC);
 
             Interval interval = new Interval(durationExpression);
             Duration duration = Duration.parse(durationExpression);
@@ -51,12 +55,27 @@ class IntervalTest {
     }
 
     @Test
+    void toStringForDuration() {
+        assertThat(new Interval(Duration.ofHours(1)).toString()).isEqualTo("PT1H");
+        assertThat(new Interval("PT1H [PT1H/PT1H]").toString()).isEqualTo("PT1H [PT1H/PT1H]");
+    }
+
+    @Test
+    void toStringCanBeParsedBackIntoInterval() {
+        var pt1h = new Interval(Duration.ofHours(1)).toString();
+        assertThat(ScheduleExpressionType.createScheduleFromString(pt1h).toString()).isEqualTo(pt1h);
+
+        var pt1hWithMargin = new Interval("PT1H [PT1H/PT1H]").toString();
+        assertThat(ScheduleExpressionType.createScheduleFromString(pt1hWithMargin).toString()).isEqualTo(pt1hWithMargin);
+    }
+
+    @Test
     void intervalsAreScheduledIndependentlyOfZoneId() {
         int hour = 8;
         Instant now = Instant.now();
 
-        Instant actualNextInstant1 = new Interval(Duration.ofHours(hour)).next(now, ZoneId.of("+02:00"));
-        Instant actualNextInstant2 = new Interval(Duration.ofHours(hour)).next(now, UTC);
+        Instant actualNextInstant1 = new Interval(Duration.ofHours(hour)).next(createdAtNotRelevantInstant, now, ZoneId.of("+02:00"));
+        Instant actualNextInstant2 = new Interval(Duration.ofHours(hour)).next(createdAtNotRelevantInstant, now, UTC);
 
         assertThat(actualNextInstant1).isEqualTo(actualNextInstant2);
     }
@@ -79,12 +98,40 @@ class IntervalTest {
         Interval interval2 = new Interval(Duration.ofDays(1));
 
         assertThat(interval1)
-                .describedAs("Expecting %s to be less than %s. Current LocalDateTime", interval1.next(now, UTC).toString(), interval2.next(now, UTC).toString(), now.toString())
+                .describedAs("Expecting %s to be less than %s. Current LocalDateTime", interval1.next(createdAtNotRelevantInstant, now, UTC).toString(), interval2.next(createdAtNotRelevantInstant, now, UTC).toString(), now.toString())
                 .isLessThan(interval2);
     }
 
     static Stream<Arguments> startInstantDurationAndResultInstant() {
+        Instant createdAt1 = Instant.parse("2024-11-19T04:01:57Z");
+        Instant createdAt2 = Instant.parse("2024-11-20T04:01:57Z");
+        Instant createdAt3 = createdAt2.plus(Duration.ofHours(10));
+
         return Stream.of(
+                // TEST IDEMPOTENCY 1
+                arguments(TEN_HOURS, createdAt1.toString(), createdAt1.toString(), createdAt1.plus(10, HOURS).toString()),
+                arguments(TEN_HOURS, createdAt1.toString(), createdAt1.minusSeconds(5).toString(), createdAt1.plus(10, HOURS).toString()),
+                arguments(TEN_HOURS, createdAt1.toString(), "2024-11-20T14:34:07Z", "2024-11-20T20:01:57Z"),
+                arguments(TEN_HOURS, createdAt1.toString(), "2024-11-20T20:01:57Z", "2024-11-21T06:01:57Z"),
+                arguments(TEN_HOURS, createdAt1.toString(), "2024-11-20T10:01:52Z", "2024-11-20T10:01:57Z"),
+                arguments(TEN_HOURS, createdAt1.toString(), "2024-11-20T10:01:57Z", "2024-11-20T20:01:57Z"),
+
+                // TEST IDEMPOTENCY 2
+                arguments(TEN_HOURS, createdAt2.toString(), createdAt2.toString(), createdAt2.plus(10, HOURS).toString()),
+                arguments(TEN_HOURS, createdAt2.toString(), createdAt2.minus(5, HOURS).toString(), createdAt2.plus(10, HOURS).toString()),
+                arguments(TEN_HOURS, createdAt2.toString(), "2024-11-20T14:34:07Z", "2024-11-21T00:01:57Z"),
+                arguments(TEN_HOURS, createdAt2.toString(), "2024-11-21T00:01:57Z", "2024-11-21T10:01:57Z"),
+                arguments(TEN_HOURS, createdAt2.toString(), "2024-11-20T14:01:52Z", "2024-11-20T14:01:57Z"),
+                arguments(TEN_HOURS, createdAt2.toString(), "2024-11-20T14:01:57Z", "2024-11-21T00:01:57Z"),
+
+                // TEST IDEMPOTENCY 3
+                arguments(TEN_HOURS, createdAt3.toString(), createdAt3.toString(), createdAt3.plus(10, HOURS).toString()),
+                arguments(TEN_HOURS, createdAt3.toString(), createdAt3.minus(5, HOURS).toString(), createdAt3.plus(10, HOURS).toString()),
+                arguments(TEN_HOURS, createdAt3.toString(), "2024-11-20T14:04:07Z", "2024-11-21T00:01:57Z"),
+                arguments(TEN_HOURS, createdAt3.toString(), "2024-11-21T00:01:57Z", "2024-11-21T10:01:57Z"),
+                arguments(TEN_HOURS, createdAt3.toString(), "2024-11-20T14:01:52Z", "2024-11-21T00:01:57Z"),
+                arguments(TEN_HOURS, createdAt3.toString(), "2024-11-21T00:01:57Z", "2024-11-21T10:01:57Z"),
+
                 arguments(FIVE_SECONDS, "2019-01-01 00:00:00", "2019-01-01 00:00:01", "2019-01-01 00:00:05"),
                 arguments(TEN_SECONDS, "2019-01-01 00:00:00", "2019-01-01 00:00:00", "2019-01-01 00:00:10"),
                 arguments(TEN_SECONDS, "2019-01-01 00:00:00", "2019-01-01 00:20:05", "2019-01-01 00:20:10"),

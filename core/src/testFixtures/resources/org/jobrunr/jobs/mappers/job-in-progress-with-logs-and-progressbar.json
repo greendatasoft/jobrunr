@@ -1,0 +1,60 @@
+{
+  "id": "${json-unit.ignore}",
+  "jobHistory": [
+    {
+      "@class": "org.jobrunr.jobs.states.EnqueuedState",
+      "state": "ENQUEUED",
+      "createdAt": "${json-unit.ignore}"
+    },
+    {
+      "@class": "org.jobrunr.jobs.states.ProcessingState",
+      "serverId": "${json-unit.ignore}",
+      "serverName": "${json-unit.ignore}",
+      "updatedAt": "${json-unit.ignore}",
+      "state": "PROCESSING",
+      "createdAt": "${json-unit.ignore}"
+    }
+  ],
+  "metadata": {
+    "@class": "java.util.concurrent.ConcurrentHashMap",
+    "jobRunrDashboardLog-2": {
+      "@class": "org.jobrunr.jobs.context.JobDashboardLogger$JobDashboardLogLines",
+      "logLines": [
+        {
+          "level": "INFO",
+          "logInstant": "${json-unit.ignore}",
+          "logMessage": "test 1"
+        },
+        {
+          "level": "WARN",
+          "logInstant": "${json-unit.ignore}",
+          "logMessage": "test 2"
+        }
+      ]
+    },
+    "jobRunrDashboardProgressBar-2": {
+      "@class": "org.jobrunr.jobs.context.JobDashboardProgressBar$JobDashboardProgress",
+      "totalAmount": 10,
+      "succeededAmount": 4,
+      "failedAmount": 0,
+      "progress": 40
+    }
+  },
+  "version": 0,
+  "jobSignature": "java.lang.System.out.println(java.lang.String)",
+  "jobName": "an enqueued job",
+  "labels": [],
+  "jobDetails": {
+    "cacheable": true,
+    "className": "java.lang.System",
+    "staticFieldName": "out",
+    "methodName": "println",
+    "jobParameters": [
+      {
+        "className": "java.lang.String",
+        "actualClassName": "java.lang.String",
+        "object": "a test"
+      }
+    ]
+  }
+}

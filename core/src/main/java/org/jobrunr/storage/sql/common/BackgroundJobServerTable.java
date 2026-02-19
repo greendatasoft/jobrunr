@@ -3,27 +3,50 @@ package org.jobrunr.storage.sql.common;
 import org.jobrunr.storage.BackgroundJobServerStatus;
 import org.jobrunr.storage.ServerTimedOutException;
 import org.jobrunr.storage.StorageException;
+import org.jobrunr.storage.StorageProviderUtils;
+import org.jobrunr.storage.navigation.AmountRequest;
 import org.jobrunr.storage.sql.common.db.ConcurrentSqlModificationException;
+import org.jobrunr.storage.sql.common.db.Dialect;
 import org.jobrunr.storage.sql.common.db.Sql;
 import org.jobrunr.storage.sql.common.db.SqlResultSet;
-import org.jobrunr.storage.sql.common.db.dialect.Dialect;
+import org.jobrunr.storage.sql.common.mapper.SqlAmountRequestMapper;
 
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import java.util.stream.Stream;
 
 import static java.util.stream.Collectors.toList;
 import static org.jobrunr.JobRunrException.shouldNotHappenException;
-import static org.jobrunr.storage.StorageProviderUtils.BackgroundJobServers.*;
+import static org.jobrunr.storage.StorageProviderUtils.BackgroundJobServers.FIELD_DELETE_SUCCEEDED_JOBS_AFTER;
+import static org.jobrunr.storage.StorageProviderUtils.BackgroundJobServers.FIELD_FIRST_HEARTBEAT;
+import static org.jobrunr.storage.StorageProviderUtils.BackgroundJobServers.FIELD_ID;
+import static org.jobrunr.storage.StorageProviderUtils.BackgroundJobServers.FIELD_IS_RUNNING;
+import static org.jobrunr.storage.StorageProviderUtils.BackgroundJobServers.FIELD_LAST_HEARTBEAT;
+import static org.jobrunr.storage.StorageProviderUtils.BackgroundJobServers.FIELD_NAME;
+import static org.jobrunr.storage.StorageProviderUtils.BackgroundJobServers.FIELD_PERMANENTLY_DELETE_JOBS_AFTER;
+import static org.jobrunr.storage.StorageProviderUtils.BackgroundJobServers.FIELD_POLL_INTERVAL_IN_SECONDS;
+import static org.jobrunr.storage.StorageProviderUtils.BackgroundJobServers.FIELD_PROCESS_ALLOCATED_MEMORY;
+import static org.jobrunr.storage.StorageProviderUtils.BackgroundJobServers.FIELD_PROCESS_CPU_LOAD;
+import static org.jobrunr.storage.StorageProviderUtils.BackgroundJobServers.FIELD_PROCESS_FREE_MEMORY;
+import static org.jobrunr.storage.StorageProviderUtils.BackgroundJobServers.FIELD_PROCESS_MAX_MEMORY;
+import static org.jobrunr.storage.StorageProviderUtils.BackgroundJobServers.FIELD_SYSTEM_CPU_LOAD;
+import static org.jobrunr.storage.StorageProviderUtils.BackgroundJobServers.FIELD_SYSTEM_FREE_MEMORY;
+import static org.jobrunr.storage.StorageProviderUtils.BackgroundJobServers.FIELD_SYSTEM_TOTAL_MEMORY;
+import static org.jobrunr.storage.StorageProviderUtils.BackgroundJobServers.FIELD_WORKER_POOL_SIZE;
+import static org.jobrunr.utils.CollectionUtils.asSet;
 
 public class BackgroundJobServerTable extends Sql<BackgroundJobServerStatus> {
+    private final SqlAmountRequestMapper amountRequestMapper;
 
     public BackgroundJobServerTable(Connection connection, Dialect dialect, String tablePrefix) {
+        this.amountRequestMapper = new SqlAmountRequestMapper(dialect, asSet(FIELD_FIRST_HEARTBEAT));
         this
                 .using(connection, dialect, tablePrefix, "jobrunr_backgroundjobservers")
                 .with(FIELD_ID, BackgroundJobServerStatus::getId)
+                .with(FIELD_NAME, BackgroundJobServerStatus::getName)
                 .with(FIELD_WORKER_POOL_SIZE, BackgroundJobServerStatus::getWorkerPoolSize)
                 .with(FIELD_POLL_INTERVAL_IN_SECONDS, BackgroundJobServerStatus::getPollIntervalInSeconds)
                 .with(FIELD_DELETE_SUCCEEDED_JOBS_AFTER, BackgroundJobServerStatus::getDeleteSucceededJobsAfter)
@@ -40,18 +63,24 @@ public class BackgroundJobServerTable extends Sql<BackgroundJobServerStatus> {
                 .with(FIELD_PROCESS_CPU_LOAD, BackgroundJobServerStatus::getProcessCpuLoad);
     }
 
+    public BackgroundJobServerTable withId(UUID id) {
+        with(StorageProviderUtils.BackgroundJobServers.FIELD_ID, id);
+        return this;
+    }
+
     public void announce(BackgroundJobServerStatus serverStatus) throws SQLException {
         this
-                .with(FIELD_ID, serverStatus.getId())
+                .withId(serverStatus.getId())
                 .delete("from jobrunr_backgroundjobservers where id = :id");
         this
-                .insert(serverStatus, "into jobrunr_backgroundjobservers values (:id, :workerPoolSize, :pollIntervalInSeconds, :firstHeartbeat, :lastHeartbeat, :running, :systemTotalMemory, :systemFreeMemory, :systemCpuLoad, :processMaxMemory, :processFreeMemory, :processAllocatedMemory, :processCpuLoad, :deleteSucceededJobsAfter, :permanentlyDeleteJobsAfter)");
+                .insert(serverStatus, "into jobrunr_backgroundjobservers(id, name, workerPoolSize, pollIntervalInSeconds, firstHeartbeat, lastHeartbeat, running, systemTotalMemory, systemFreeMemory, systemCpuLoad, processMaxMemory, processFreeMemory, processAllocatedMemory, processCpuLoad, deleteSucceededJobsAfter, permanentlyDeleteJobsAfter) " +
+                        "values (:id, :name, :workerPoolSize, :pollIntervalInSeconds, :firstHeartbeat, :lastHeartbeat, :running, :systemTotalMemory, :systemFreeMemory, :systemCpuLoad, :processMaxMemory, :processFreeMemory, :processAllocatedMemory, :processCpuLoad, :deleteSucceededJobsAfter, :permanentlyDeleteJobsAfter)");
     }
 
     public boolean signalServerAlive(BackgroundJobServerStatus serverStatus) throws SQLException {
         try {
             this
-                    .with(FIELD_ID, serverStatus.getId())
+                    .withId(serverStatus.getId())
                     .with(FIELD_LAST_HEARTBEAT, serverStatus.getLastHeartbeat())
                     .with(FIELD_SYSTEM_FREE_MEMORY, serverStatus.getSystemFreeMemory())
                     .with(FIELD_SYSTEM_CPU_LOAD, serverStatus.getSystemCpuLoad())
@@ -63,7 +92,8 @@ public class BackgroundJobServerTable extends Sql<BackgroundJobServerStatus> {
             throw new ServerTimedOutException(serverStatus, new StorageException("Background Job Server with id " + serverStatus.getId() + " is not found"));
         }
 
-        return select("running from jobrunr_backgroundjobservers where id = :id")
+        return withId(serverStatus.getId())
+                .select("running from jobrunr_backgroundjobservers where id = :id")
                 .map(sqlResultSet -> sqlResultSet.asBoolean(FIELD_IS_RUNNING))
                 .findFirst()
                 .orElseThrow(() -> new ServerTimedOutException(serverStatus, new StorageException("Background Job Server with id " + serverStatus.getId() + " is not found")));
@@ -72,7 +102,7 @@ public class BackgroundJobServerTable extends Sql<BackgroundJobServerStatus> {
     public void signalServerStopped(BackgroundJobServerStatus serverStatus) {
         try {
             this
-                    .with(FIELD_ID, serverStatus.getId())
+                    .withId(serverStatus.getId())
                     .delete("from jobrunr_backgroundjobservers where id = :id");
         } catch (SQLException notImportant) {
             // this is not important
@@ -91,16 +121,20 @@ public class BackgroundJobServerTable extends Sql<BackgroundJobServerStatus> {
     }
 
     public UUID getLongestRunningBackgroundJobServerId() {
-        return withOrderLimitAndOffset("firstHeartbeat ASC", 1, 0)
-                .select("id from jobrunr_backgroundjobservers")
+        return select("id from jobrunr_backgroundjobservers", new AmountRequest(FIELD_FIRST_HEARTBEAT, 1))
                 .map(sqlResultSet -> sqlResultSet.asUUID(FIELD_ID))
                 .findFirst()
                 .orElseThrow(() -> shouldNotHappenException("No servers available?!"));
     }
 
+    private Stream<SqlResultSet> select(String statement, AmountRequest pageRequest) {
+        return super.select(statement, amountRequestMapper.mapToSqlQuery(pageRequest, this));
+    }
+
     private BackgroundJobServerStatus toBackgroundJobServerStatus(SqlResultSet resultSet) {
         return new BackgroundJobServerStatus(
                 resultSet.asUUID(FIELD_ID),
+                resultSet.asString(FIELD_NAME),
                 resultSet.asInt(FIELD_WORKER_POOL_SIZE),
                 resultSet.asInt(FIELD_POLL_INTERVAL_IN_SECONDS),
                 resultSet.asDuration(FIELD_DELETE_SUCCEEDED_JOBS_AFTER),

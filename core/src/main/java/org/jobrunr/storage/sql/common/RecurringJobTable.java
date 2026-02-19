@@ -2,16 +2,18 @@ package org.jobrunr.storage.sql.common;
 
 import org.jobrunr.jobs.RecurringJob;
 import org.jobrunr.jobs.mappers.JobMapper;
+import org.jobrunr.storage.sql.common.db.Dialect;
 import org.jobrunr.storage.sql.common.db.Sql;
 import org.jobrunr.storage.sql.common.db.SqlResultSet;
-import org.jobrunr.storage.sql.common.db.dialect.Dialect;
 
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.List;
 
 import static java.util.stream.Collectors.toList;
-import static org.jobrunr.storage.StorageProviderUtils.RecurringJobs.*;
+import static org.jobrunr.storage.StorageProviderUtils.RecurringJobs.FIELD_CREATED_AT;
+import static org.jobrunr.storage.StorageProviderUtils.RecurringJobs.FIELD_ID;
+import static org.jobrunr.storage.StorageProviderUtils.RecurringJobs.FIELD_JOB_AS_JSON;
 
 public class RecurringJobTable extends Sql<RecurringJob> {
 
@@ -59,6 +61,4 @@ public class RecurringJobTable extends Sql<RecurringJob> {
     private RecurringJob toRecurringJob(SqlResultSet resultSet) {
         return jobMapper.deserializeRecurringJob(resultSet.asString(FIELD_JOB_AS_JSON));
     }
-
-
 }

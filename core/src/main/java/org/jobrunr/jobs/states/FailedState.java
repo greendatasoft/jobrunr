@@ -3,11 +3,14 @@ package org.jobrunr.jobs.states;
 import org.jobrunr.JobRunrException;
 import org.jobrunr.utils.reflection.ReflectionUtils;
 
+import java.time.Instant;
+
 import static org.jobrunr.utils.exceptions.Exceptions.getStackTraceAsString;
 
 @SuppressWarnings({"FieldMayBeFinal", "CanBeFinal"}) // because of JSON-B
 public class FailedState extends AbstractJobState {
 
+    private transient Exception exception;
     private String message;
     private String exceptionType;
     private String exceptionMessage;
@@ -17,25 +20,32 @@ public class FailedState extends AbstractJobState {
     private boolean doNotRetry;
 
     protected FailedState() { // for json deserialization
-        super(StateName.FAILED);
-        this.message = null;
-        this.exceptionType = null;
-        this.exceptionMessage = null;
-        this.exceptionCauseType = null;
-        this.exceptionCauseMessage = null;
-        this.stackTrace = null;
-        this.doNotRetry = false;
+        this(null, null, null, null, null, null, false, Instant.now());
     }
 
     public FailedState(String message, Exception exception) {
-        super(StateName.FAILED);
+        this(
+                message,
+                exception.getClass().getName(),
+                exception.getMessage(),
+                hasCause(exception) ? exception.getCause().getClass().getName() : null,
+                hasCause(exception) ? exception.getCause().getMessage() : null,
+                getStackTraceAsString(exception),
+                isProblematicAndDoNotRetry(exception),
+                Instant.now()
+        );
+        this.exception = exception;
+    }
+
+    public FailedState(String message, String exceptionType, String exceptionMessage, String exceptionCauseType, String exceptionCauseMessage, String stackTrace, boolean doNotRetry, Instant createdAt) {
+        super(StateName.FAILED, createdAt);
         this.message = message;
-        this.exceptionType = exception.getClass().getName();
-        this.exceptionMessage = exception.getMessage();
-        this.exceptionCauseType = hasCause(exception) ? exception.getCause().getClass().getName() : null;
-        this.exceptionCauseMessage = hasCause(exception) ? exception.getCause().getMessage() : null;
-        this.stackTrace = getStackTraceAsString(exception);
-        this.doNotRetry = isProblematicAndDoNotRetry(exception);
+        this.exceptionType = exceptionType;
+        this.exceptionMessage = exceptionMessage;
+        this.exceptionCauseType = exceptionCauseType;
+        this.exceptionCauseMessage = exceptionCauseMessage;
+        this.stackTrace = stackTrace;
+        this.doNotRetry = doNotRetry;
     }
 
     public String getMessage() {
@@ -67,6 +77,7 @@ public class FailedState extends AbstractJobState {
     }
 
     public Exception getException() {
+        if (exception != null) return exception;
         try {
             final Class<? extends Exception> exceptionClass = ReflectionUtils.toClass(getExceptionType());
             if (getExceptionCauseType() != null) {

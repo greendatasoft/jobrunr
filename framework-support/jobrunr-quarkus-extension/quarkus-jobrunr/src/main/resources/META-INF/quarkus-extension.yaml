@@ -1,0 +1,20 @@
+---
+name: "JobRunr"
+description: "Integrates JobRunr, a distributed background job scheduler"
+metadata:
+  short-name: "jobrunr"
+  keywords:
+    - "jobrunr"
+    - "scheduler"
+    - "cron"
+    - "distributed background jobs"
+  guide: "https://www.jobrunr.io/en/documentation/configuration/quarkus/"
+  icon-url: "https://raw.githubusercontent.com/jobrunr/website/master/static/jobrunr-logo.png"
+  sponsor: "Rosoco BV"
+  categories:
+    - "miscellaneous"
+  status: "stable"
+  scm-url: "https://github.com/jobrunr/jobrunr"
+  extension-dependencies:
+    - "io.quarkus:quarkus-arc"
+    - "io.quarkus:quarkus-core"

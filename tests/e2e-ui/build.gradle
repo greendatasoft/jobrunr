@@ -1,0 +1,36 @@
+plugins {
+}
+
+compileJava {
+    options.release = 17
+}
+
+compileTestJava {
+    options.release = 17
+}
+
+dependencies {
+    implementation project(':core')
+    implementation testFixtures(project(":core"))
+    implementation 'ch.qos.logback:logback-classic'
+
+    testImplementation project(':core')
+    testImplementation 'org.jetbrains.kotlinx:kotlinx-serialization-json'
+    testImplementation project(':language-support:jobrunr-kotlin-22-support')
+    testImplementation 'com.google.code.gson:gson'
+    testImplementation 'com.fasterxml.jackson.core:jackson-databind'
+    testImplementation 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310'
+    testImplementation 'com.fasterxml.jackson.datatype:jackson-datatype-jdk8'
+    testImplementation 'com.google.code.gson:gson'
+    testImplementation 'org.eclipse:yasson'
+
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testImplementation 'org.assertj:assertj-core'
+    testImplementation 'com.microsoft.playwright:playwright'
+    testImplementation 'org.testcontainers:testcontainers'
+    testImplementation 'org.testcontainers:testcontainers-postgresql'
+}
+
+sonar {
+    skipProject = true
+}

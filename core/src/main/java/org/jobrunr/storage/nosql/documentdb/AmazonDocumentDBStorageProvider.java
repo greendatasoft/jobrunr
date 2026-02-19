@@ -53,6 +53,16 @@ public class AmazonDocumentDBStorageProvider extends MongoDBStorageProvider {
         super(mongoClient, dbName, collectionPrefix, databaseOptions, changeListenerNotificationRateLimit);
     }
 
+    @Override
+    protected void runMigrations(MongoClient mongoClient, String dbName, String collectionPrefix) {
+        new AmazonDocumentDBCreator(mongoClient, dbName, collectionPrefix).runMigrations();
+    }
+
+    @Override
+    protected void validateTables(MongoClient mongoClient, String dbName, String collectionPrefix) {
+        new AmazonDocumentDBCreator(mongoClient, dbName, collectionPrefix).validateCollections();
+    }
+
     public static AmazonDocumentDBStorageProvider amazonDocumentDBStorageProviderWithDefaultSetting(String hostName, int port, MongoCredential credential) {
         return new AmazonDocumentDBStorageProvider(getDocumentDBDefaultSetting(new ServerAddress(hostName, port), credential));
     }

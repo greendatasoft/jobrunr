@@ -1,6 +1,7 @@
 package org.jobrunr.storage;
 
 import org.jobrunr.jobs.Job;
+import org.jobrunr.utils.annotations.Because;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -15,9 +16,13 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 import static java.time.Duration.between;
+import static java.time.Instant.now;
 import static java.util.Arrays.asList;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.jobrunr.jobs.JobTestBuilder.*;
+import static org.jobrunr.jobs.JobTestBuilder.aCopyOf;
+import static org.jobrunr.jobs.JobTestBuilder.aFailedJob;
+import static org.jobrunr.jobs.JobTestBuilder.aJobInProgress;
+import static org.jobrunr.jobs.JobTestBuilder.aSucceededJob;
 import static org.jobrunr.utils.SleepUtils.sleep;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
@@ -52,13 +57,13 @@ class ThreadSafeStorageProviderTest {
 
         CountDownLatch countDownLatch = new CountDownLatch(4);
 
-        final ExecutorService executorService = Executors.newFixedThreadPool(4);
         final Callable<Void> runnable1 = () -> saveAndCountDown(succeededJob1, countDownLatch);
         final Callable<Void> runnable2 = () -> saveAndCountDown(succeededJob2, countDownLatch);
         final Callable<Void> runnable3 = () -> saveAndCountDown(succeededJob3, countDownLatch);
         final Callable<Void> runnable4 = () -> saveAndCountDown(failedJob, countDownLatch);
 
-        final Instant before = Instant.now();
+        ExecutorService executorService = Executors.newFixedThreadPool(4);
+        Instant before = Instant.now();
         executorService.invokeAll(asList(
                 runnable1,
                 runnable2,
@@ -69,6 +74,7 @@ class ThreadSafeStorageProviderTest {
         final Instant after = Instant.now();
 
         assertThat(between(before, after).toMillis()).isLessThan(250L);
+        executorService.shutdown();
     }
 
     @Test
@@ -79,11 +85,11 @@ class ThreadSafeStorageProviderTest {
 
         CountDownLatch countDownLatch = new CountDownLatch(2);
 
-        final ExecutorService executorService = Executors.newFixedThreadPool(2);
         final Callable<Void> runnable1 = () -> saveAllAndCountDown(asList(jobInProgress1, jobInProgress2), countDownLatch);
         final Callable<Void> runnable2 = () -> saveAndCountDown(finishedJob, countDownLatch);
 
-        final Instant before = Instant.now();
+        ExecutorService executorService = Executors.newFixedThreadPool(2);
+        Instant before = Instant.now();
         executorService.invokeAll(asList(
                 runnable1,
                 runnable2
@@ -92,6 +98,39 @@ class ThreadSafeStorageProviderTest {
         final Instant after = Instant.now();
 
         assertThat(between(before, after).toMillis()).isGreaterThan(200L);
+        executorService.shutdown();
+    }
+
+    @Test
+    @Because("github issue 455")
+    void sameJobCanNotChangeStateWhileItIsSaved() throws InterruptedException {
+        final CountDownLatch countDownToInitiateSaveJob = new CountDownLatch(1);
+        lenient().when(storageProviderMock.save(any(Job.class))).thenAnswer(invocation -> {
+            countDownToInitiateSaveJob.countDown();
+            sleep(100);
+            return invocation.getArgument(0);
+        });
+
+        final Job jobInProgress = aJobInProgress().build();
+        final CountDownLatch countDownToSaveJob = new CountDownLatch(1);
+
+        ExecutorService executorService = Executors.newFixedThreadPool(1);
+        final Runnable runnable = () -> saveAndCountDown(jobInProgress, countDownToSaveJob);
+        executorService.execute(runnable);
+
+        countDownToInitiateSaveJob.await(); // to make sure the runnable is processing and prevent a race condition
+
+        final Instant before = now();
+        jobInProgress.failed("This fails", new RuntimeException());
+        final Instant after = now();
+
+        countDownToSaveJob.await();
+        // why: while the job is being saved to the DB (which due to mocking is taking about 100ms)
+        // the job cannot be updated with a new state, and it must wait for the 100ms.
+        // This is because the ThreadSafeStorageProvider is locking the job and the job itself is
+        // also locking itself while adding a state change.
+        assertThat(between(before, after).toMillis()).isGreaterThanOrEqualTo(100L);
+        executorService.shutdown();
     }
 
     private Void saveAndCountDown(Job job, CountDownLatch countDownLatch) {

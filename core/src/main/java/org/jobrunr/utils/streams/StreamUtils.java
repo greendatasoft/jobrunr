@@ -3,6 +3,7 @@ package org.jobrunr.utils.streams;
 import java.util.Collection;
 import java.util.List;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.stream.Collector;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -10,6 +11,13 @@ import java.util.stream.Stream;
 public final class StreamUtils {
 
     private StreamUtils() {
+    }
+
+    public static <T> Function<T, T> consumerToFunction(Consumer<T> consumer) {
+        return t -> {
+            consumer.accept(t);
+            return t;
+        };
     }
 
     /**
@@ -20,7 +28,7 @@ public final class StreamUtils {
      * @param <T>            the type of elements being processed
      * @return a batch collector instance
      */
-    public static <T> Collector<T, List<T>, List<T>> batchCollector(int batchSize, Consumer<List<T>> batchProcessor) {
+    public static <T> Collector<T, List<T>, Long> batchCollector(int batchSize, Consumer<List<T>> batchProcessor) {
         return new BatchCollector<>(batchSize, batchProcessor);
     }
 

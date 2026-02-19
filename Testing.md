@@ -60,81 +60,61 @@ spring.datasource.username=db2inst1
 spring.datasource.password=db2password
 ```
 
-## Redis
-
-`docker run -d -p 6379:6379 redis`
-
-### Jedis
-
-```java
-    @Bean
-public StorageProvider storageProvider(JobMapper jobMapper){
-final JedisRedisStorageProvider jedisRedisStorageProvider=new JedisRedisStorageProvider(getJedisPool(),rateLimit().withoutLimits());
-        jedisRedisStorageProvider.setJobMapper(new JobMapper(new JacksonJsonMapper()));
-        return jedisRedisStorageProvider;
-        }
-
-private JedisPool getJedisPool(){
-        return new JedisPool("127.0.0.1",6379);
-        }
-```
-
-### Lettuce
-
-```java
-    @Bean
-public StorageProvider storageProvider(JobMapper jobMapper){
-final LettuceRedisStorageProvider lettuceRedisStorageProvider=new LettuceRedisStorageProvider(getRedisClient(),rateLimit().withoutLimits());
-        lettuceRedisStorageProvider.setJobMapper(jobMapper);
-        return lettuceRedisStorageProvider;
-        }
-
-private RedisClient getRedisClient(){
-        return RedisClient.create(RedisURI.create("127.0.0.1",6379));
-        }
-```
-
 ## Mongo
 
 `docker run -d -p 27017:27017 mongo:4.4`
 
 ```java
-    @Bean
-public StorageProvider storageProvider(JobMapper jobMapper){
-final MongoDBStorageProvider dbStorageProvider=new MongoDBStorageProvider(mongoClient(),rateLimit().withoutLimits());
-        dbStorageProvider.setJobMapper(jobMapper);
-        return dbStorageProvider;
-        }
 
-private MongoClient mongoClient(){
-        CodecRegistry codecRegistry=CodecRegistries.fromRegistries(
-        CodecRegistries.fromCodecs(new UuidCodec(UuidRepresentation.STANDARD)),
-        MongoClientSettings.getDefaultCodecRegistry()
-        );
-        return MongoClients.create(
-        MongoClientSettings.builder()
-        .applyToClusterSettings(builder->builder.hosts(Arrays.asList(new ServerAddress("127.0.0.1",27017))))
-        .codecRegistry(codecRegistry)
-        .build());
-        }
+@Bean
+public StorageProvider storageProvider(JobMapper jobMapper) {
+    final MongoDBStorageProvider dbStorageProvider = new MongoDBStorageProvider(mongoClient(), rateLimit().withoutLimits());
+    dbStorageProvider.setJobMapper(jobMapper);
+    return dbStorageProvider;
+}
+
+private MongoClient mongoClient() {
+    CodecRegistry codecRegistry = CodecRegistries.fromRegistries(
+            CodecRegistries.fromCodecs(new UuidCodec(UuidRepresentation.STANDARD)),
+            MongoClientSettings.getDefaultCodecRegistry()
+    );
+    return MongoClients.create(
+            MongoClientSettings.builder()
+                    .applyToClusterSettings(builder -> builder.hosts(Arrays.asList(new ServerAddress("127.0.0.1", 27017))))
+                    .codecRegistry(codecRegistry)
+                    .build());
+}
 ```
 
-## ElasticSearch
+## DocumentDB
 
-`docker run -p 9200:9200 -p 9300:9300 -e "discovery.type=single-node" elasticsearch:7.9.1`
+- Start new DocumentDB instance in cloud with username jobrunr and password jobrunr123.
+  note: TLS must be enabled, see https://stackoverflow.com/questions/68322959/why-am-i-getting-connection-timed-out-when-connecting-to-aws-document-db-from-my
+- Create a new Ubuntu EC2 instance in the same VPC (Virtual Private Cloud) and GENERATE a new key pair (will be downloaded automatically). Call it
+  default-documentdb.pem
+- chmod 400 default-documentdb.pem
+- Change the Inbound Rules of the EC2 instance and ADD A NEW rule to allow access from everywhere
+- Create a new DocumentDB cluster parameter group and disable TLS
+- Assign the new Cluster Parameter Group to the DocumentDB cluster
+- Restart the cluster
+- Use the link provided by Amazon and create a ConnectionString with it passing it to the client
 
 ```java
-    @Bean
-public StorageProvider storageProvider(JobMapper jobMapper){
-final ElasticSearchStorageProvider elasticSearchStorageProvider=new ElasticSearchStorageProvider(getElasticSearchClient(),rateLimit().withoutLimits());
-        elasticSearchStorageProvider.setJobMapper(jobMapper);
-        return elasticSearchStorageProvider;
-        }
 
-private RestHighLevelClient getElasticSearchClient(){
-        return new RestHighLevelClient(
-        RestClient.builder(
-        new HttpHost("127.0.0.1",9200,"http")));
+@Bean
+private MongoClient mongoClient() {
+    CodecRegistry codecRegistry = CodecRegistries.fromRegistries(
+            CodecRegistries.fromCodecs(new UuidCodec(UuidRepresentation.STANDARD)),
+            MongoClientSettings.getDefaultCodecRegistry()
+    );
+    if (mongoClient == null) {
+        mongoClient = MongoClients.create(
+                MongoClientSettings.builder()
+                        .applyConnectionString(new ConnectionString("mongodb://jobrunr:jobrunr123@docdb-2023-04-24-09-47-54.cluster-cjpre4alt9oy.us-east-1.docdb.amazonaws.com:27017/?replicaSet=rs0&readPreference=secondaryPreferred&retryWrites=false"))
+                        .codecRegistry(codecRegistry)
+                        .build());
 
-        }
+    }
+    return mongoClient;
+}
 ```

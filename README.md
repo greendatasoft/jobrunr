@@ -1,37 +1,35 @@
 <p align="center">
- <img src="https://user-images.githubusercontent.com/567842/80095933-1181c900-8569-11ea-85e7-14129b3f8142.png" alt="JobRunr logo"></img>
+ <a href="https://www.jobrunr.io/en/" target="_blank"><img src="https://user-images.githubusercontent.com/567842/80095933-1181c900-8569-11ea-85e7-14129b3f8142.png" alt="JobRunr logo"></img></a>
 </p>  
 <p align="center">
 The ultimate library to perform background processing on the JVM.<br/>
 Dead simple API. Extensible. Reliable. <br/>
 Distributed and backed by persistent storage. <br/>
-Open and free for commercial use.
+Open and free for commercial use.  <br/>
+Recommended and <a href="https://www.thoughtworks.com/radar/languages-and-frameworks/jobrunr">loved by ThoughtWorks</a>.
 </p>  
 <br/>
 
 
-
 <p align="center">
-    <a href="https://search.maven.org/artifact/org.jobrunr/jobrunr"><img src="https://maven-badges.herokuapp.com/maven-central/org.jobrunr/jobrunr/badge.svg"></a>&nbsp;
-    <img alt="Drone Build" src="https://build.jobrunr.io/api/badges/jobrunr/jobrunr/status.svg" />&nbsp;
+    <a href="https://central.sonatype.com/artifact/org.jobrunr/jobrunr"><img alt="Maven Central Version" src="https://img.shields.io/maven-central/v/org.jobrunr/jobrunr"></a>&nbsp;
+    <img alt="Woodpecker CI" src="https://ci.jobrunr.io/api/badges/1/status.svg" />&nbsp;
+    <a href="https://www.bestpractices.dev/projects/7376"><img alt="OpenSSF Best Practices" src="https://www.bestpractices.dev/projects/7376/badge"/></a>&nbsp;
     <img alt="LGPLv3 Licence" src="https://img.shields.io/badge/license-LGPLv3-green.svg" /><br/>
-    <a href="https://sonarcloud.io/dashboard?id=jobrunr_jobrunr"><img alt="Quality Scale" src="https://sonarcloud.io/api/project_badges/measure?project=jobrunr_jobrunr&metric=sqale_rating" /></a>&nbsp;
-    <a href="https://sonarcloud.io/dashboard?id=jobrunr_jobrunr"><img alt="Reliability Rating" src="https://sonarcloud.io/api/project_badges/measure?project=jobrunr_jobrunr&metric=reliability_rating" /></a>&nbsp;
-    <a href="https://sonarcloud.io/dashboard?id=jobrunr_jobrunr"><img alt="Security Rating" src="https://sonarcloud.io/api/project_badges/measure?project=jobrunr_jobrunr&metric=security_rating" /></a><br/>
-    <a href="https://sonarcloud.io/dashboard?id=jobrunr_jobrunr"><img alt="Coverage" src="https://sonarcloud.io/api/project_badges/measure?project=jobrunr_jobrunr&metric=coverage" /></a>&nbsp;
-    <a href="https://sonarcloud.io/dashboard?id=jobrunr_jobrunr"><img alt="Vulnerabilities" src="https://sonarcloud.io/api/project_badges/measure?project=jobrunr_jobrunr&metric=vulnerabilities" /></a>&nbsp;
-    <a href="https://sonarcloud.io/dashboard?id=jobrunr_jobrunr"><img alt="Bugs" src="https://sonarcloud.io/api/project_badges/measure?project=jobrunr_jobrunr&metric=bugs" /></a><br/>
-    <a href="https://twitter.com/intent/tweet?text=Try%20JobRunr%20for%20easy%20distributed%20background%20job%20processing%20on%20the%20JVM%21%20&url=https://www.jobrunr.io&via=jobrunr&hashtags=java,scheduling,processing,distributed,developers"><img alt="Tweet about us!" src="https://www.jobrunr.io/tweet-btn.svg?v2" /></a>&nbsp;
-    <a href="https://github.com/jobrunr/jobrunr/stargazers"><img alt="Star us!" src="https://www.jobrunr.io/github-star-btn.svg?v2" /></a>
-    <a href="https://github.com/jobrunr/jobrunr/discussions"><img src="https://img.shields.io/badge/chat-Github%20discussions-green" alt="Join the chat at Gitter" /></a><br />
+    <br/>
+    <a href="https://twitter.com/intent/tweet?text=Try%20JobRunr%20for%20easy%20distributed%20background%20job%20processing%20on%20the%20JVM%21%20&url=https://www.jobrunr.io&via=jobrunr&hashtags=java,scheduling,processing,distributed,developers"><img alt="Tweet about us!" src="https://img.shields.io/twitter/url?label=Tweet%20about%20us!&url=https%3A%2F%2Fx.com%2FJobRunr"></a>&nbsp;
+    <a href="https://github.com/jobrunr/jobrunr/stargazers"><img alt="Star us!" src="https://img.shields.io/github/stars/jobrunr/jobrunr?label=Star%20us!" /></a>
+    <a href="https://github.com/jobrunr/jobrunr/discussions"><img src="https://img.shields.io/badge/chat-Github%20discussions-green" alt="Chat with us in Github Discussions" /></a><br />
 </p>
 
 ## Overview
+
+<!-- // @formatter:off -->
 ```java
 BackgroundJob.enqueue(() -> System.out.println("This is all you need for distributed jobs!"));
 ```
 
-Incredibly easy way to perform **fire-and-forget**, **delayed**, **scheduled** and **recurring jobs** inside **Java applications** using only *Java 8 lambda's*. CPU and I/O intensive, long-running and short-running jobs are supported. Persistent storage is done via either RDBMS (e.g. Postgres, MariaDB/MySQL, Oracle, SQL Server, DB2 and SQLite) or NoSQL (ElasticSearch, MongoDB and Redis).
+Incredibly easy way to perform **fire-and-forget**, **delayed**, **scheduled** and **recurring jobs** inside **Java applications** using only *Java 8 lambda's*. CPU and I/O intensive, long-running and short-running jobs are supported. Persistent storage is done via either RDBMS (e.g. Postgres, MariaDB/MySQL, Oracle, SQL Server, DB2 and SQLite) or NoSQL (MongoDB).
 
 JobRunr provides a unified programming model to handle background tasks in a **reliable way** and runs them on shared hosting, dedicated hosting or in the cloud ([hello Kubernetes](https://www.jobrunr.io/en/blog/2020-05-06-jobrunr-kubrnetes-terraform/)) within a JVM instance.
 
@@ -45,7 +43,7 @@ View more feedback on [jobrunr.io](https://www.jobrunr.io/en/#why-jobrunr).
 ## Features
 - Simple: just use Java 8 lambda's to create a background job.
 - Distributed & cluster-friendly: guarantees execution by single scheduler instance using optimistic locking.
-- Persistent jobs: using either a RDMBS (four tables and a view) or a noSQL data store.
+- Persistent jobs: using either a RDBMS (four tables and a view) or a NoSQL data store.
 - Embeddable: built to be embedded in existing applications.
 - Minimal dependencies: ([ASM](https://asm.ow2.io/), slf4j and either [jackson](https://github.com/FasterXML/jackson) and jackson-datatype-jsr310, [gson](https://github.com/google/gson) or a JSON-B compliant library).
 
@@ -97,7 +95,7 @@ BackgroundJob.schedule(Instant.now().plusHours(5), () -> System.out.println("Rel
 Recurring jobs have never been simpler; just call the following method to perform any kind of recurring task using the [CRON expressions](http://en.wikipedia.org/wiki/Cron#CRON_expression).
 
 ```java
-BackgroundJob.scheduleRecurringly("my-recurring-job", Cron.daily(), () -> service.doWork());
+BackgroundJob.scheduleRecurrently("my-recurring-job", Cron.daily(), () -> service.doWork());
 ```
 
 **Process background tasks inside a web application…**
@@ -121,7 +119,7 @@ Installation
 <dependency>
     <groupId>org.jobrunr</groupId>
     <artifactId>jobrunr</artifactId>
-    <version>5.1.0</version>
+    <version>${jobrunr.version}</version>
 </dependency>
 ```
  
@@ -129,21 +127,21 @@ Installation
  
 Just add the dependency to JobRunr:
  ```groovy
-implementation 'org.jobrunr:jobrunr:5.1.0'
+implementation 'org.jobrunr:jobrunr:${jobrunr.version}'
 ```
 
 Configuration
 ------------
 #### Do you like to work Spring based?
 
-Add the [*jobrunr-spring-boot-starter*](https://search.maven.org/artifact/org.jobrunr/jobrunr-spring-boot-starter) to your dependencies and you're almost ready to go! Just set up your `application.properties`:
+Add the [*jobrunr-spring-boot-3-starter*](https://search.maven.org/artifact/org.jobrunr/jobrunr-spring-boot-3-starter) to your dependencies and you're almost ready to go! Just set up your `application.properties`:
 
 ```
 # the job-scheduler is enabled by default
 # the background-job-server and dashboard are disabled by default
-org.jobrunr.job-scheduler.enabled=true
-org.jobrunr.background-job-server.enabled=true
-org.jobrunr.dashboard.enabled=true
+jobrunr.job-scheduler.enabled=true
+jobrunr.background-job-server.enabled=true
+jobrunr.dashboard.enabled=true
 ```
 
 #### Or do you prefer a fluent API?
@@ -165,7 +163,7 @@ public class JobRunrApplication {
                           .using(dataSource))
                 .useBackgroundJobServer()
                 .useDashboard()
-                .initialize();
+                .initialize().getJobScheduler();
     }
 }
 ```

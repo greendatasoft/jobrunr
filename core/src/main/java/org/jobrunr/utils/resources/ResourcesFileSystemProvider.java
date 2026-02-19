@@ -15,6 +15,7 @@ public class ResourcesFileSystemProvider implements FileSystemProvider {
 
     private FileSystem fileSystem;
 
+    @Override
     public Path toPath(URI uri) throws IOException {
         try {
             if (!"resource".equals(uri.getScheme())) {
@@ -30,9 +31,13 @@ public class ResourcesFileSystemProvider implements FileSystemProvider {
 
     private FileSystem getFileSystem() throws IOException {
         if (fileSystem == null) {
-            Map<String, Object> options = new HashMap<>();
-            options.put("create", Boolean.TRUE);
-            fileSystem = FileSystems.newFileSystem(URI.create("resource:/resources"), options, null);
+            try {
+                fileSystem = FileSystems.getFileSystem(URI.create("resource:/resources"));
+            } catch (Exception e) {
+                Map<String, Object> options = new HashMap<>();
+                options.put("create", true);
+                fileSystem = FileSystems.newFileSystem(URI.create("resource:/resources"), options, null);
+            }
         }
         return fileSystem;
     }

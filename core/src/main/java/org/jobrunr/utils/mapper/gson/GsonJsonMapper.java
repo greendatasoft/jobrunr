@@ -7,11 +7,12 @@ import org.jobrunr.JobRunrException;
 import org.jobrunr.jobs.JobParameter;
 import org.jobrunr.jobs.context.JobContext;
 import org.jobrunr.jobs.states.JobState;
+import org.jobrunr.utils.JarUtils;
 import org.jobrunr.utils.mapper.JobParameterJsonMapperException;
 import org.jobrunr.utils.mapper.JsonMapper;
-import org.jobrunr.utils.metadata.VersionRetriever;
 import org.jobrunr.utils.reflection.ReflectionUtils;
 
+import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.OutputStreamWriter;
@@ -19,11 +20,15 @@ import java.lang.reflect.Field;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Collections.unmodifiableList;
 
 public class GsonJsonMapper implements JsonMapper {
@@ -46,13 +51,16 @@ public class GsonJsonMapper implements JsonMapper {
 
     protected Gson initGson(GsonBuilder gsonBuilder) {
         return gsonBuilder
-                .serializeNulls()
                 .registerTypeAdapterFactory(RuntimeClassNameTypeAdapterFactory.of(JobState.class))
                 .registerTypeAdapterFactory(RuntimeClassNameTypeAdapterFactory.of(Map.class))
                 .registerTypeAdapterFactory(RuntimeClassNameTypeAdapterFactory.of(JobContext.Metadata.class))
                 .registerTypeHierarchyAdapter(Path.class, new PathAdapter().nullSafe())
+                .registerTypeAdapter(File.class, new FileAdapter().nullSafe())
                 .registerTypeAdapter(Instant.class, new InstantAdapter().nullSafe())
-                .registerTypeAdapter(Duration.class, new DurationAdapter())
+                .registerTypeAdapter(LocalDate.class, new LocalDateAdapter().nullSafe())
+                .registerTypeAdapter(LocalDateTime.class, new LocalDateTimeAdapter().nullSafe())
+                .registerTypeAdapter(OffsetDateTime.class, new OffsetDateTimeAdapter().nullSafe())
+                .registerTypeAdapter(Duration.class, new DurationAdapter().nullSafe())
                 .registerTypeAdapter(JobParameter.class, new JobParameterDeserializer())
                 .create();
     }
@@ -68,7 +76,7 @@ public class GsonJsonMapper implements JsonMapper {
 
     @Override
     public void serialize(OutputStream outputStream, Object object) {
-        try (final OutputStreamWriter writer = new OutputStreamWriter(outputStream)) {
+        try (final OutputStreamWriter writer = new OutputStreamWriter(outputStream, UTF_8)) {
             gson.toJson(object, writer);
         } catch (IOException e) {
             throw JobRunrException.shouldNotHappenException(e);
@@ -89,7 +97,7 @@ public class GsonJsonMapper implements JsonMapper {
             ReflectionUtils.makeAccessible(factories);
             final List o = new ArrayList<TypeAdapterFactory>((Collection<? extends TypeAdapterFactory>) factories.get(gson));
             if (!o.get(1).getClass().getName().contains("ObjectTypeAdapter"))
-                throw JobRunrException.shouldNotHappenException(String.format("It looks like you are running a Gson version (%s) which is not compatible with JobRunr", VersionRetriever.getVersion(Gson.class)));
+                throw JobRunrException.shouldNotHappenException(String.format("It looks like you are running a Gson version (%s) which is not compatible with JobRunr", JarUtils.getVersion(Gson.class)));
             o.set(1, ClassNameObjectTypeAdapter.FACTORY);
             factories.set(gson, unmodifiableList(o));
         } catch (ReflectiveOperationException e) {

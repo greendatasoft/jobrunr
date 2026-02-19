@@ -7,7 +7,6 @@ import org.jobrunr.JobRunrException;
 import org.jobrunr.configuration.JobRunr;
 import org.jobrunr.jobs.Job;
 import org.jobrunr.jobs.JobId;
-import org.jobrunr.jobs.lambdas.IocJobLambda;
 import org.jobrunr.jobs.states.ProcessingState;
 import org.jobrunr.jobs.stubs.SimpleJobActivator;
 import org.jobrunr.scheduling.BackgroundJob;
@@ -15,8 +14,10 @@ import org.jobrunr.server.runner.BackgroundJobWithIocRunner;
 import org.jobrunr.server.runner.BackgroundJobWithoutIocRunner;
 import org.jobrunr.server.runner.BackgroundStaticJobWithoutIocRunner;
 import org.jobrunr.storage.InMemoryStorageProvider;
+import org.jobrunr.storage.JobRunrMetadata;
 import org.jobrunr.storage.StorageException;
 import org.jobrunr.storage.StorageProvider;
+import org.jobrunr.storage.sql.h2.H2StorageProvider;
 import org.jobrunr.stubs.StaticTestService;
 import org.jobrunr.stubs.TestService;
 import org.jobrunr.stubs.TestServiceForIoC;
@@ -25,16 +26,21 @@ import org.jobrunr.utils.SleepUtils;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mockito;
+import org.mockito.Spy;
 import org.mockito.internal.stubbing.answers.AnswersWithDelay;
 import org.mockito.internal.stubbing.answers.ThrowsException;
+import org.mockito.junit.jupiter.MockitoExtension;
 
-import java.time.temporal.ChronoUnit;
 import java.util.Map;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import static java.time.Duration.ofMillis;
 import static java.time.Instant.now;
+import static java.time.temporal.ChronoUnit.MILLIS;
+import static java.time.temporal.ChronoUnit.MINUTES;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -42,22 +48,34 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.within;
 import static org.awaitility.Awaitility.await;
-import static org.awaitility.Durations.*;
+import static org.awaitility.Durations.FIVE_SECONDS;
+import static org.awaitility.Durations.ONE_MINUTE;
+import static org.awaitility.Durations.TEN_SECONDS;
+import static org.awaitility.Durations.TWO_SECONDS;
 import static org.jobrunr.JobRunrAssertions.assertThat;
 import static org.jobrunr.jobs.JobTestBuilder.anEnqueuedJob;
-import static org.jobrunr.jobs.states.StateName.*;
+import static org.jobrunr.jobs.states.StateName.ENQUEUED;
+import static org.jobrunr.jobs.states.StateName.FAILED;
+import static org.jobrunr.jobs.states.StateName.PROCESSING;
+import static org.jobrunr.jobs.states.StateName.SCHEDULED;
+import static org.jobrunr.jobs.states.StateName.SUCCEEDED;
 import static org.jobrunr.server.BackgroundJobServerConfiguration.usingStandardBackgroundJobServerConfiguration;
+import static org.jobrunr.storage.StorageProviderUtils.DatabaseOptions.NO_VALIDATE;
+import static org.jobrunr.utils.SleepUtils.sleep;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doAnswer;
 
+@ExtendWith(MockitoExtension.class)
 class BackgroundJobServerTest {
 
     private TestService testService;
-    private StorageProvider storageProvider;
+    @Spy
+    private StorageProvider storageProvider = new InMemoryStorageProvider();
     private BackgroundJobServer backgroundJobServer;
     private TestServiceForIoC testServiceForIoC;
     private SimpleJobActivator jobActivator;
     private ListAppender<ILoggingEvent> logger;
+    private ListAppender<ILoggingEvent> jobZooKeeperLogger;
 
     @BeforeEach
     void setUp() {
@@ -65,20 +83,61 @@ class BackgroundJobServerTest {
         testServiceForIoC = new TestServiceForIoC("an argument");
         testService.reset();
         testServiceForIoC.reset();
-        storageProvider = Mockito.spy(new InMemoryStorageProvider());
         jobActivator = new SimpleJobActivator(testServiceForIoC);
         JobRunr.configure()
                 .useJobActivator(jobActivator)
                 .useStorageProvider(storageProvider)
-                .useBackgroundJobServer(usingStandardBackgroundJobServerConfiguration().andPollIntervalInSeconds(5), false)
+                .useBackgroundJobServer(usingStandardBackgroundJobServerConfiguration().andPollInterval(ofMillis(500)), false)
                 .initialize();
         backgroundJobServer = JobRunr.getBackgroundJobServer();
         logger = LoggerAssert.initFor(backgroundJobServer);
+        jobZooKeeperLogger = LoggerAssert.initFor(backgroundJobServer.getJobSteward());
     }
 
     @AfterEach
-    void stopBackgroundJobServer() {
+    void tearDown() {
         backgroundJobServer.stop();
+        storageProvider.close();
+    }
+
+    @Test
+    void backgroundJobServerWaitsForMigrationBeforeBeingAnnounced() {
+        doAnswer(invocation -> {
+            // simulate long during migration
+            JobRunrMetadata metadata = invocation.getArgument(0);
+            if ("database_version".equals(metadata.getName()) && "6.0.0".equals(metadata.getValue())) {
+                sleep(5, SECONDS);
+            }
+            return invocation.callRealMethod();
+        }).when(storageProvider).saveMetadata(any());
+
+        // WHEN
+        backgroundJobServer.start();
+
+        // THEN
+        sleep(100, MILLISECONDS);
+        assertThat(backgroundJobServer.isAnnounced()).isTrue();
+        assertThat(backgroundJobServer.isNotReadyToProcessJobs()).isTrue();
+
+        // WHEN migration is running
+        await().during(4, SECONDS)
+                .until(() -> backgroundJobServer.isNotReadyToProcessJobs());
+
+        // THEN
+        await().atMost(2, SECONDS)
+                .untilAsserted(() -> assertThat(backgroundJobServer.isNotReadyToProcessJobs()).isFalse());
+    }
+
+    @Test
+    void backgroundJobServerValidatesPollIntervalInSecondsAndThrowsExceptionIfTooSmall() {
+        assertThatThrownBy(() -> {
+            JobRunr.configure()
+                    .useStorageProvider(new H2StorageProvider(null, NO_VALIDATE))
+                    .useBackgroundJobServer(usingStandardBackgroundJobServerConfiguration().andPollInterval(ofMillis(500)), false)
+                    .initialize();
+        })
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("The smallest supported pollInterval is 5 seconds - otherwise it will cause to much load on your SQL/noSQL datastore.");
     }
 
     @Test
@@ -87,39 +146,40 @@ class BackgroundJobServerTest {
         JobId jobId = BackgroundJob.enqueue(() -> testService.doWork());
 
         // THEN the job should stay in state ENQUEUED
-        await().during(TWO_SECONDS).atMost(FIVE_SECONDS).until(() -> testService.getProcessedJobs() == 0);
+        await().during(TWO_SECONDS).until(() -> testService.getProcessedJobs() == 0);
         assertThat(storageProvider.getJobById(jobId)).hasStates(ENQUEUED);
 
         // WHEN we start the server
         backgroundJobServer.start();
 
         // THEN the job should be processed
-        await().atMost(TEN_SECONDS).untilAsserted(() -> assertThat(storageProvider.getJobById(jobId)).hasStates(ENQUEUED, PROCESSING, SUCCEEDED));
+        await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(storageProvider.getJobById(jobId)).hasStates(ENQUEUED, PROCESSING, SUCCEEDED));
 
         // WHEN we pause the server and enqueue a new job
         backgroundJobServer.pauseProcessing();
         JobId anotherJobId = BackgroundJob.enqueue(() -> testService.doWork());
 
         // THEN the job should stay in state ENQUEUED
-        await().during(TWO_SECONDS).atMost(FIVE_SECONDS).until(() -> testService.getProcessedJobs() == 1);
-        await().atMost(TEN_SECONDS).untilAsserted(() -> assertThat(storageProvider.getJobById(anotherJobId)).hasStates(ENQUEUED));
+        await().during(1, SECONDS).until(() -> testService.getProcessedJobs() == 1);
+        await().during(1, SECONDS).untilAsserted(() -> assertThat(storageProvider.getJobById(anotherJobId)).hasStates(ENQUEUED));
 
         // WHEN we resume the server again
         backgroundJobServer.resumeProcessing();
 
         // THEN the job should be processed again
-        await().atMost(TEN_SECONDS).until(() -> testService.getProcessedJobs() > 1);
-        await().atMost(TEN_SECONDS).untilAsserted(() -> assertThat(storageProvider.getJobById(anotherJobId)).hasStates(ENQUEUED, PROCESSING, SUCCEEDED));
+        await().atMost(FIVE_SECONDS).until(() -> testService.getProcessedJobs() > 1);
+        await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(storageProvider.getJobById(anotherJobId)).hasStates(ENQUEUED, PROCESSING, SUCCEEDED));
 
         // WHEN we shutdown the server
         backgroundJobServer.stop();
-        assertThat(logger).hasInfoMessageContaining("BackgroundJobServer and BackgroundJobPerformers - stopping (waiting for all jobs to complete - max 10 seconds)", 1);
+        assertThat(logger).hasInfoMessageContaining("stopping (may take about PT10S)", 1);
 
         // THEN no running backgroundjob threads should exist
         await().atMost(TEN_SECONDS)
                 .untilAsserted(() -> assertThat(Thread.getAllStackTraces())
                         .matches(this::containsNoBackgroundJobThreads, "Found BackgroundJob Threads: \n\t" + getThreadNames(Thread.getAllStackTraces()).collect(Collectors.joining("\n\t"))));
         assertThat(logger).hasInfoMessageContaining("BackgroundJobServer and BackgroundJobPerformers stopped", 1);
+        assertThat(jobZooKeeperLogger).hasNoWarnLogMessages();
     }
 
     @Test
@@ -154,7 +214,7 @@ class BackgroundJobServerTest {
         assertThat(backgroundJobServer.isUnAnnounced()).isTrue();
         assertThat(backgroundJobServer.isStarted()).isTrue();
         assertThat(backgroundJobServer.isRunning()).isTrue();
-        await().until(() -> backgroundJobServer.isStopped());
+        await().atMost(15, SECONDS).until(() -> backgroundJobServer.isStopped());
         Mockito.reset(storageProvider);
 
         // INITIAL -> START
@@ -175,6 +235,7 @@ class BackgroundJobServerTest {
         assertThat(backgroundJobServer.isAnnounced()).isTrue();
         assertThat(backgroundJobServer.isStarted()).isTrue();
         assertThat(backgroundJobServer.isRunning()).isFalse();
+        assertThat(backgroundJobServer.isStopped()).isFalse();
 
         // PAUSE -> STOP
         assertThatCode(() -> backgroundJobServer.stop()).doesNotThrowAnyException();
@@ -182,18 +243,21 @@ class BackgroundJobServerTest {
         assertThat(backgroundJobServer.isAnnounced()).isFalse();
         assertThat(backgroundJobServer.isStarted()).isFalse();
         assertThat(backgroundJobServer.isRunning()).isFalse();
+        assertThat(backgroundJobServer.isStopped()).isTrue();
 
         // STOP -> RESUME
         assertThatThrownBy(() -> backgroundJobServer.resumeProcessing()).isInstanceOf(IllegalStateException.class);
         assertThat(backgroundJobServer.isAnnounced()).isFalse();
         assertThat(backgroundJobServer.isStarted()).isFalse();
         assertThat(backgroundJobServer.isRunning()).isFalse();
+        assertThat(backgroundJobServer.isStopped()).isTrue();
 
         // STOP -> PAUSE
         assertThatThrownBy(() -> backgroundJobServer.pauseProcessing()).isInstanceOf(IllegalStateException.class);
         assertThat(backgroundJobServer.isAnnounced()).isFalse();
         assertThat(backgroundJobServer.isStarted()).isFalse();
         assertThat(backgroundJobServer.isRunning()).isFalse();
+        assertThat(backgroundJobServer.isStopped()).isTrue();
 
         // STOP -> START
         assertThatCode(() -> backgroundJobServer.start()).doesNotThrowAnyException();
@@ -201,18 +265,21 @@ class BackgroundJobServerTest {
         assertThat(backgroundJobServer.isAnnounced()).isTrue();
         assertThat(backgroundJobServer.isStarted()).isTrue();
         assertThat(backgroundJobServer.isRunning()).isTrue();
+        assertThat(backgroundJobServer.isStopped()).isFalse();
 
         // START -> START
         assertThatCode(() -> backgroundJobServer.start()).doesNotThrowAnyException();
         assertThat(backgroundJobServer.isAnnounced()).isTrue();
         assertThat(backgroundJobServer.isStarted()).isTrue();
         assertThat(backgroundJobServer.isRunning()).isTrue();
+        assertThat(backgroundJobServer.isStopped()).isFalse();
 
         // START -> RESUME
         assertThatCode(() -> backgroundJobServer.resumeProcessing()).doesNotThrowAnyException();
         assertThat(backgroundJobServer.isAnnounced()).isTrue();
         assertThat(backgroundJobServer.isStarted()).isTrue();
         assertThat(backgroundJobServer.isRunning()).isTrue();
+        assertThat(backgroundJobServer.isStopped()).isFalse();
 
         // RESUME -> RESUME
         assertThatCode(() -> backgroundJobServer.resumeProcessing()).doesNotThrowAnyException();
@@ -225,19 +292,19 @@ class BackgroundJobServerTest {
     void testStopBackgroundJobServerWhileProcessing() {
         backgroundJobServer.start();
 
-        final JobId jobId = BackgroundJob.enqueue(() -> testService.doWorkThatTakesLong(15));
-        await().atMost(6, SECONDS).until(() -> storageProvider.getJobById(jobId).hasState(PROCESSING));
+        final JobId jobId = BackgroundJob.enqueue(() -> testService.doWorkThatTakesLong(12));
+        await().atMost(500, MILLISECONDS).until(() -> storageProvider.getJobById(jobId).hasState(PROCESSING));
         backgroundJobServer.stop();
-        await().atMost(60, SECONDS).until(() -> storageProvider.getJobById(jobId).hasState(FAILED) || storageProvider.getJobById(jobId).hasState(SCHEDULED));
+        await().atMost(20, SECONDS).until(() -> storageProvider.getJobById(jobId).hasState(FAILED) || storageProvider.getJobById(jobId).hasState(SCHEDULED));
         backgroundJobServer.start();
-        await().atMost(21, SECONDS).until(() -> storageProvider.getJobById(jobId).hasState(SUCCEEDED));
+        await().atMost(25, SECONDS).until(() -> storageProvider.getJobById(jobId).hasState(SUCCEEDED));
     }
 
     @Test
     void testBackgroundJobServerWasKilledWhileProcessing() {
         backgroundJobServer.start();
 
-        final Job jobThatWasProcessedButBackgroundJobServerWasKilled = storageProvider.save(anEnqueuedJob().withState(new ProcessingState(backgroundJobServer.getId()), now().minus(2, ChronoUnit.MINUTES)).build());
+        final Job jobThatWasProcessedButBackgroundJobServerWasKilled = storageProvider.save(anEnqueuedJob().withState(new ProcessingState(backgroundJobServer), now().minus(2, MINUTES)).build());
         await().atMost(7, SECONDS).untilAsserted(() -> assertThat(storageProvider.getJobById(jobThatWasProcessedButBackgroundJobServerWasKilled.getId())).hasStates(ENQUEUED, PROCESSING, FAILED, SCHEDULED));
         await().atMost(7, SECONDS).until(() -> storageProvider.getJobById(jobThatWasProcessedButBackgroundJobServerWasKilled.getId()).hasState(SUCCEEDED));
     }
@@ -246,10 +313,10 @@ class BackgroundJobServerTest {
     void testHeartbeatsAreSentForJobsInProcessingState() {
         backgroundJobServer.start();
 
-        final JobId jobId = BackgroundJob.enqueue(() -> testService.doWorkThatTakesLong(16));
-        await().pollInterval(150, MILLISECONDS).pollDelay(3, SECONDS).atMost(7, SECONDS).untilAsserted(() -> assertThat(storageProvider.getJobById(jobId)).hasUpdatedAtCloseTo(now(), within(500, ChronoUnit.MILLIS)));
-        await().pollInterval(150, MILLISECONDS).pollDelay(3, SECONDS).atMost(7, SECONDS).untilAsserted(() -> assertThat(storageProvider.getJobById(jobId)).hasUpdatedAtCloseTo(now(), within(500, ChronoUnit.MILLIS)));
-        await().pollInterval(150, MILLISECONDS).pollDelay(3, SECONDS).atMost(7, SECONDS).untilAsserted(() -> assertThat(storageProvider.getJobById(jobId)).hasUpdatedAtCloseTo(now(), within(500, ChronoUnit.MILLIS)));
+        final JobId jobId = BackgroundJob.enqueue(() -> testService.doWorkThatTakesLong(4));
+        await().pollInterval(150, MILLISECONDS).pollDelay(1, SECONDS).atMost(2, SECONDS).untilAsserted(() -> assertThat(storageProvider.getJobById(jobId)).hasUpdatedAtCloseTo(now(), within(500, MILLIS)));
+        await().pollInterval(150, MILLISECONDS).pollDelay(1, SECONDS).atMost(2, SECONDS).untilAsserted(() -> assertThat(storageProvider.getJobById(jobId)).hasUpdatedAtCloseTo(now(), within(500, MILLIS)));
+        await().pollInterval(150, MILLISECONDS).pollDelay(1, SECONDS).atMost(2, SECONDS).untilAsserted(() -> assertThat(storageProvider.getJobById(jobId)).hasUpdatedAtCloseTo(now(), within(500, MILLIS)));
     }
 
     @Test
@@ -266,7 +333,7 @@ class BackgroundJobServerTest {
     @Test
     void getBackgroundJobRunnerForIoCJobWithoutInstance() {
         final Job job = anEnqueuedJob()
-                .withJobDetails((IocJobLambda<TestServiceForIoC>) (x) -> x.doWork())
+                .<TestService>withJobDetails(ts -> ts.doWork())
                 .build();
         assertThat(backgroundJobServer.getBackgroundJobRunner(job))
                 .isNotNull()
@@ -288,7 +355,7 @@ class BackgroundJobServerTest {
         jobActivator.clear();
 
         final Job job = anEnqueuedJob()
-                .withJobDetails((IocJobLambda<TestService>) (x) -> x.doWork())
+                .<TestService>withJobDetails(ts -> ts.doWork())
                 .build();
         assertThat(backgroundJobServer.getBackgroundJobRunner(job))
                 .isNotNull()
@@ -322,7 +389,7 @@ class BackgroundJobServerTest {
     @Test
     void getBackgroundJobRunnerForJobThatCannotBeRun() {
         final Job job = anEnqueuedJob()
-                .withJobDetails((IocJobLambda<TestServiceThatCannotBeRun>) (x) -> x.doWork())
+                .<TestServiceThatCannotBeRun>withJobDetails(ts -> ts.doWork())
                 .build();
         assertThatThrownBy(() -> backgroundJobServer.getBackgroundJobRunner(job))
                 .isInstanceOf(JobRunrException.class);
@@ -345,7 +412,7 @@ class BackgroundJobServerTest {
         backgroundJobServer.start();
 
         await().atMost(10, SECONDS)
-                .untilAsserted(() -> assertThat(logger).hasErrorMessage("JobRunr BackgroundJobServer failed to start"));
+                .untilAsserted(() -> assertThat(logger).hasErrorMessageContaining("failed to start"));
     }
 
     private boolean containsNoBackgroundJobThreads(Map<Thread, StackTraceElement[]> threadMap) {

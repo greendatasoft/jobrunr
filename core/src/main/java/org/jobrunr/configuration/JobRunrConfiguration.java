@@ -15,9 +15,7 @@ import org.jobrunr.server.jmx.JobRunrJMXExtensions;
 import org.jobrunr.storage.StorageProvider;
 import org.jobrunr.utils.mapper.JsonMapper;
 import org.jobrunr.utils.mapper.JsonMapperException;
-import org.jobrunr.utils.mapper.gson.GsonJsonMapper;
-import org.jobrunr.utils.mapper.jackson.JacksonJsonMapper;
-import org.jobrunr.utils.mapper.jsonb.JsonbJsonMapper;
+import org.jobrunr.utils.mapper.JsonMapperFactory;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -27,7 +25,6 @@ import static java.util.Optional.ofNullable;
 import static org.jobrunr.dashboard.JobRunrDashboardWebServerConfiguration.usingStandardDashboardConfiguration;
 import static org.jobrunr.server.BackgroundJobServerConfiguration.usingStandardBackgroundJobServerConfiguration;
 import static org.jobrunr.utils.mapper.JsonMapperValidator.validateJsonMapper;
-import static org.jobrunr.utils.reflection.ReflectionUtils.classExists;
 
 /**
  * The main class to configure JobRunr
@@ -46,8 +43,8 @@ public class JobRunrConfiguration {
     JobRunrMicroMeterIntegration microMeterIntegration;
 
     JobRunrConfiguration() {
-        this.jsonMapper = determineJsonMapper();
-        this.jobMapper = new JobMapper(jsonMapper);
+        this.jsonMapper = JsonMapperFactory.createJsonMapper();
+        this.jobMapper = this.jsonMapper == null ? null : new JobMapper(jsonMapper);
         this.jobDetailsGenerator = new CachingJobDetailsGenerator();
         this.jobFilters = new ArrayList<>();
     }
@@ -60,10 +57,10 @@ public class JobRunrConfiguration {
      */
     public JobRunrConfiguration useJsonMapper(JsonMapper jsonMapper) {
         if (this.storageProvider != null) {
-            throw new IllegalStateException("Please configure the JobActivator before the StorageProvider.");
+            throw new IllegalStateException("Please configure the JsonMapper before the StorageProvider.");
         }
         if (this.dashboardWebServer != null) {
-            throw new IllegalStateException("Please configure the JobActivator before the DashboardWebServer.");
+            throw new IllegalStateException("Please configure the JsonMapper before the DashboardWebServer.");
         }
         this.jsonMapper = validateJsonMapper(jsonMapper);
         this.jobMapper = new JobMapper(jsonMapper);
@@ -270,33 +267,57 @@ public class JobRunrConfiguration {
      * @return the same configuration instance which provides a fluent api
      */
     public JobRunrConfiguration useJmxExtensions() {
-        return useJmxExtensionsIf(true);
+        return useJmxExtensionsIf(true, true);
+    }
+
+    /**
+     * If called, this method will register JMX Extensions to monitor JobRunr via JMX
+     *
+     * @param reportJobStatistics allows to enable or disable reporting of job statistics (note: there is a performance hit on your {@link StorageProvider} by enabling it)
+     * @return the same configuration instance which provides a fluent api
+     */
+    public JobRunrConfiguration useJmxExtensions(boolean reportJobStatistics) {
+        return useJmxExtensionsIf(true, reportJobStatistics);
     }
 
     /**
      * Enables JMX Extensions to monitor JobRunr via JMX if the guard is true
      *
-     * @param guard whether to start the JXM Extensions or not.
+     * @param guard               whether to start the JXM Extensions or not.
+     * @param reportJobStatistics allows to enable or disable reporting of job statistics (note: there is a performance hit on your {@link StorageProvider} by enabling it)
      * @return the same configuration instance which provides a fluent api
      */
-    public JobRunrConfiguration useJmxExtensionsIf(boolean guard) {
+    public JobRunrConfiguration useJmxExtensionsIf(boolean guard, boolean reportJobStatistics) {
         if (guard) {
             if (backgroundJobServer == null)
                 throw new IllegalStateException("Please configure the BackgroundJobServer before the JMXExtension.");
             if (storageProvider == null)
                 throw new IllegalStateException("Please configure the StorageProvider before the JMXExtension.");
-            this.jmxExtension = new JobRunrJMXExtensions(backgroundJobServer, storageProvider);
+            this.jmxExtension = new JobRunrJMXExtensions(backgroundJobServer, storageProvider, reportJobStatistics);
         }
         return this;
     }
 
     /**
-     * Allows integrating MicroMeter metrics into JobRunr
+     * Allows integrating MicroMeter metrics into JobRunr.
+     *
+     * @param microMeterIntegration the JobRunrMicroMeterIntegration
+     * @return the same configuration instance which provides a fluent api
+     * @deprecated please use {@link JobRunrConfiguration#useMetrics(JobRunrMicroMeterIntegration)} instead.
+     */
+    @Deprecated
+    public JobRunrConfiguration useMicroMeter(JobRunrMicroMeterIntegration microMeterIntegration) {
+        this.microMeterIntegration = microMeterIntegration;
+        return this;
+    }
+
+    /**
+     * Allows integrating MicroMeter metrics into JobRunr.
      *
      * @param microMeterIntegration the JobRunrMicroMeterIntegration
      * @return the same configuration instance which provides a fluent api
      */
-    public JobRunrConfiguration useMicroMeter(JobRunrMicroMeterIntegration microMeterIntegration) {
+    public JobRunrConfiguration useMetrics(JobRunrMicroMeterIntegration microMeterIntegration) {
         this.microMeterIntegration = microMeterIntegration;
         return this;
     }
@@ -319,22 +340,13 @@ public class JobRunrConfiguration {
      * @return a JobScheduler to enqueue/schedule new jobs
      */
     public JobRunrConfigurationResult initialize() {
+        if (jsonMapper == null) {
+            throw new JsonMapperException("No JsonMapper class is found. Make sure you have either Jackson, Gson or a JsonB compliant library available on your classpath. You may also configure a custom JsonMapper.");
+        }
         ofNullable(microMeterIntegration).ifPresent(meterRegistry -> meterRegistry.initialize(storageProvider, backgroundJobServer));
         final JobScheduler jobScheduler = new JobScheduler(storageProvider, jobDetailsGenerator, jobFilters);
         final JobRequestScheduler jobRequestScheduler = new JobRequestScheduler(storageProvider, jobFilters);
         return new JobRunrConfigurationResult(jobScheduler, jobRequestScheduler);
-    }
-
-    private static JsonMapper determineJsonMapper() {
-        if (classExists("com.fasterxml.jackson.databind.ObjectMapper")) {
-            return new JacksonJsonMapper();
-        } else if (classExists("com.google.gson.Gson")) {
-            return new GsonJsonMapper();
-        } else if (classExists("javax.json.bind.JsonbBuilder")) {
-            return new JsonbJsonMapper();
-        } else {
-            throw new JsonMapperException("No JsonMapper class is found. Make sure you have either Jackson, Gson or a JsonB compliant library available on your classpath");
-        }
     }
 
     public static class JobRunrConfigurationResult {

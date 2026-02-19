@@ -8,12 +8,20 @@ import org.jobrunr.dashboard.ui.model.problems.ProblemsManager;
 import org.jobrunr.jobs.Job;
 import org.jobrunr.jobs.RecurringJob;
 import org.jobrunr.jobs.states.StateName;
-import org.jobrunr.storage.*;
+import org.jobrunr.storage.JobNotFoundException;
+import org.jobrunr.storage.JobRunrMetadata;
+import org.jobrunr.storage.Page;
+import org.jobrunr.storage.RecurringJobsResult;
+import org.jobrunr.storage.StorageProvider;
+import org.jobrunr.storage.ThreadSafeStorageProvider;
+import org.jobrunr.storage.navigation.OffsetBasedPageRequest;
 import org.jobrunr.utils.mapper.JsonMapper;
 
 import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
+
+import static org.jobrunr.utils.StringUtils.isNullOrEmpty;
 
 public class JobRunrApiHandler extends RestHttpHandler {
 
@@ -28,14 +36,14 @@ public class JobRunrApiHandler extends RestHttpHandler {
         this.storageProvider = storageProvider;
         this.allowAnonymousDataUsage = allowAnonymousDataUsage;
 
-        get("/jobs", findJobByState());
+        get("/metadata/:name/:owner", getMetadataByNameAndOwner());
+        get("/problems", getProblems());
+        delete("/problems/:type", deleteProblemByType());
 
+        get("/jobs", findJobByState());
         get("/jobs/:id", getJobById());
         delete("/jobs/:id", deleteJobById());
         post("/jobs/:id/requeue", requeueJobById());
-
-        get("/problems", getProblems());
-        delete("/problems/:type", deleteProblemByType());
 
         get("/recurring-jobs", getRecurringJobs());
         delete("/recurring-jobs/:id", deleteRecurringJob());
@@ -45,6 +53,43 @@ public class JobRunrApiHandler extends RestHttpHandler {
         get("/version", getVersion());
 
         withExceptionMapping(JobNotFoundException.class, (exc, resp) -> resp.statusCode(404));
+    }
+
+    private HttpRequestHandler getMetadataByNameAndOwner() {
+        return (request, response) -> {
+            String name = request.param(":name");
+            String owner = request.param(":owner");
+
+            if (isNullOrEmpty(name) || isNullOrEmpty(owner)) {
+                response.statusCode(404);
+                return;
+            }
+
+            JobRunrMetadata metadata = storageProvider.getMetadata(name, owner);
+            if (metadata == null) {
+                response.statusCode(404);
+            } else {
+                String format = request.queryParam("format", String.class, null);
+                if ("jsonValue".equals(format)) {
+                    response.fromJsonString(metadata.getValue());
+                } else {
+                    response.asJson(metadata);
+                }
+            }
+        };
+    }
+
+    private HttpRequestHandler getProblems() {
+        return (request, response) -> {
+            response.asJson(problemsManager().getProblems());
+        };
+    }
+
+    private HttpRequestHandler deleteProblemByType() {
+        return (request, response) -> {
+            problemsManager().dismissProblemOfType(request.param(":type", String.class));
+            response.statusCode(204);
+        };
     }
 
     private HttpRequestHandler getJobById() {
@@ -72,28 +117,15 @@ public class JobRunrApiHandler extends RestHttpHandler {
     private HttpRequestHandler findJobByState() {
         return (request, response) ->
                 response.asJson(
-                        storageProvider.getJobPage(
+                        storageProvider.getJobs(
                                 request.queryParam("state", StateName.class, StateName.ENQUEUED),
-                                request.fromQueryParams(PageRequest.class)
+                                request.fromQueryParams(OffsetBasedPageRequest.class)
                         ));
-    }
-
-    private HttpRequestHandler getProblems() {
-        return (request, response) -> {
-            response.asJson(problemsManager().getProblems());
-        };
-    }
-
-    private HttpRequestHandler deleteProblemByType() {
-        return (request, response) -> {
-            problemsManager().dismissProblemOfType(request.param(":type", String.class));
-            response.statusCode(204);
-        };
     }
 
     private HttpRequestHandler getRecurringJobs() {
         return (request, response) -> {
-            PageRequest pageRequest = request.fromQueryParams(PageRequest.class);
+            OffsetBasedPageRequest pageRequest = request.fromQueryParams(OffsetBasedPageRequest.class);
             RecurringJobsResult recurringJobs = recurringJobResults();
             final List<RecurringJobUIModel> recurringJobUIModels = recurringJobs
                     .stream()
@@ -101,14 +133,18 @@ public class JobRunrApiHandler extends RestHttpHandler {
                     .limit(pageRequest.getLimit())
                     .map(RecurringJobUIModel::new)
                     .collect(Collectors.toList());
-            Page<RecurringJobUIModel> result = new Page<>(recurringJobs.size(), recurringJobUIModels, pageRequest);
+            Page<RecurringJobUIModel> result = pageRequest.mapToNewPage(recurringJobs.size(), recurringJobUIModels);
             response.asJson(result);
         };
     }
 
     private HttpRequestHandler deleteRecurringJob() {
         return (request, response) -> {
-            storageProvider.deleteRecurringJob(request.param(":id"));
+            String jobId = request.param(":id");
+            int deleted = storageProvider.deleteRecurringJob(jobId);
+            if (deleted == 0) {
+                throw new JobNotFoundException(jobId);
+            }
             response.statusCode(204);
         };
     }
@@ -136,10 +172,10 @@ public class JobRunrApiHandler extends RestHttpHandler {
     }
 
     private VersionUIModel getVersionUIModel() {
-        if(versionUIModel != null) return versionUIModel;
-        if(allowAnonymousDataUsage) {
+        if (versionUIModel != null) return versionUIModel;
+        if (allowAnonymousDataUsage) {
             final JobRunrMetadata metadata = storageProvider.getMetadata("id", "cluster");
-            if(metadata != null) {
+            if (metadata != null) {
                 final String storageProviderType = storageProvider instanceof ThreadSafeStorageProvider
                         ? ((ThreadSafeStorageProvider) storageProvider).getStorageProvider().getClass().getSimpleName()
                         : storageProvider.getClass().getSimpleName();
@@ -155,14 +191,14 @@ public class JobRunrApiHandler extends RestHttpHandler {
     }
 
     private ProblemsManager problemsManager() {
-        if(this.problemsManager == null) {
+        if (this.problemsManager == null) {
             this.problemsManager = new ProblemsManager(storageProvider);
         }
         return this.problemsManager;
     }
 
     private RecurringJobsResult recurringJobResults() {
-        if(recurringJobsResult == null || storageProvider.recurringJobsUpdated(recurringJobsResult.getLastModifiedHash())) {
+        if (recurringJobsResult == null || storageProvider.recurringJobsUpdated(recurringJobsResult.getLastModifiedHash())) {
             recurringJobsResult = storageProvider.getRecurringJobs();
         }
         return recurringJobsResult;

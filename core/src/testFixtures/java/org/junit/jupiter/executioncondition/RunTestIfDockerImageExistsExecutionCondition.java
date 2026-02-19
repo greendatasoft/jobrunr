@@ -9,6 +9,7 @@ import java.io.InputStreamReader;
 import java.lang.reflect.AnnotatedElement;
 import java.util.Optional;
 
+import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.junit.platform.commons.support.AnnotationSupport.findAnnotation;
 
 /**
@@ -30,16 +31,17 @@ public class RunTestIfDockerImageExistsExecutionCondition implements ExecutionCo
             boolean foundDockerImage = false;
             try {
                 final Process process = Runtime.getRuntime().exec(String.format("docker images %s", imageTag));
-                try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), UTF_8))) {
                     String line;
                     while ((line = reader.readLine()) != null) {
-                        if (line.contains(imageTag.split(":")[0])) {
+                        if (line.contains(imageTag.split(":", 0)[0])) {
                             foundDockerImage = true;
                             break;
                         }
                     }
                 }
             } catch (Exception e) {
+                // ignored
             }
 
             if (foundDockerImage) {

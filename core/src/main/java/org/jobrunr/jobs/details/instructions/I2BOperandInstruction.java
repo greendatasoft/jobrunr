@@ -9,12 +9,8 @@ public class I2BOperandInstruction extends ZeroOperandInstruction {
     }
 
     @Override
-    public void load() {
-        // not needed
-    }
-
-    @Override
     public Object invokeInstruction() {
-        return null;
+        int intValue = (int) jobDetailsBuilder.getStack().pollLast();
+        return (byte) intValue;
     }
 }

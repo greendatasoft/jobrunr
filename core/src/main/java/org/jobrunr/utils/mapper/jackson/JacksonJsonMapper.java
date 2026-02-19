@@ -1,6 +1,7 @@
 package org.jobrunr.utils.mapper.jackson;
 
 import com.fasterxml.jackson.annotation.JsonAutoDetect;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.PropertyAccessor;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
@@ -10,8 +11,10 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.exc.InvalidDefinitionException;
 import com.fasterxml.jackson.databind.jsontype.impl.LaissezFaireSubTypeValidator;
 import org.jobrunr.JobRunrException;
+import org.jobrunr.jobs.Job;
 import org.jobrunr.utils.mapper.JobParameterJsonMapperException;
 import org.jobrunr.utils.mapper.JsonMapper;
+import org.jobrunr.utils.mapper.jackson.modules.JobMixin;
 import org.jobrunr.utils.mapper.jackson.modules.JobRunrModule;
 import org.jobrunr.utils.mapper.jackson.modules.JobRunrTimeModule;
 
@@ -20,7 +23,6 @@ import java.io.OutputStream;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.function.Predicate;
 
 public class JacksonJsonMapper implements JsonMapper {
 
@@ -44,7 +46,10 @@ public class JacksonJsonMapper implements JsonMapper {
 
     protected ObjectMapper initObjectMapper(ObjectMapper objectMapper, boolean moduleAutoDiscover) {
         return objectMapper
+                .addMixIn(Job.class, JobMixin.class)
+                .setSerializationInclusion(JsonInclude.Include.NON_NULL)
                 .setVisibility(PropertyAccessor.ALL, JsonAutoDetect.Visibility.NONE)
+                .setVisibility(PropertyAccessor.CREATOR, JsonAutoDetect.Visibility.DEFAULT)
                 .setVisibility(PropertyAccessor.FIELD, JsonAutoDetect.Visibility.ANY)
                 .configure(SerializationFeature.FAIL_ON_EMPTY_BEANS, false)
                 .configure(SerializationFeature.WRITE_ENUMS_USING_TO_STRING, true)
@@ -87,15 +92,20 @@ public class JacksonJsonMapper implements JsonMapper {
 
     private static List<Module> findModules(boolean moduleAutoDiscover) {
         List<Module> modules = moduleAutoDiscover ? ObjectMapper.findModules() : new ArrayList<>();
-        if (modules.stream().noneMatch(isJSR310JavaTimeModule)) {
+        if (modules.stream().noneMatch(JacksonJsonMapper::isJSR310JavaTimeModule)) {
             modules.add(new JobRunrTimeModule());
         }
-        if (modules.stream().noneMatch(isJobRunrModule)) {
+        if (modules.stream().noneMatch(JacksonJsonMapper::isJobRunrModule)) {
             modules.add(new JobRunrModule());
         }
         return modules;
     }
 
-    private static final Predicate<Module> isJSR310JavaTimeModule = m -> "jackson-datatype-jsr310".equals(m.getTypeId()) || "com.fasterxml.jackson.datatype.jsr310.JavaTimeModule".equals(m.getTypeId());
-    private static final Predicate<Module> isJobRunrModule = m -> "org.jobrunr.utils.mapper.jackson.modules.JobRunrModule".equals(m.getTypeId());
+    private static boolean isJSR310JavaTimeModule(Module m) {
+        return "jackson-datatype-jsr310".equals(m.getTypeId()) || "com.fasterxml.jackson.datatype.jsr310.JavaTimeModule".equals(m.getTypeId());
+    }
+
+    private static boolean isJobRunrModule(Module m) {
+        return "org.jobrunr.utils.mapper.jackson.modules.JobRunrModule".equals(m.getTypeId());
+    }
 }

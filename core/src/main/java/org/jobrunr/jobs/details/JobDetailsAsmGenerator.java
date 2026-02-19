@@ -1,7 +1,11 @@
 package org.jobrunr.jobs.details;
 
 import org.jobrunr.jobs.JobDetails;
-import org.jobrunr.jobs.lambdas.*;
+import org.jobrunr.jobs.lambdas.IocJobLambda;
+import org.jobrunr.jobs.lambdas.IocJobLambdaFromStream;
+import org.jobrunr.jobs.lambdas.JobLambda;
+import org.jobrunr.jobs.lambdas.JobLambdaFromStream;
+import org.jobrunr.jobs.lambdas.JobRunrJob;
 
 import java.lang.annotation.Annotation;
 
@@ -49,7 +53,6 @@ public class JobDetailsAsmGenerator implements JobDetailsGenerator {
     }
 
     private <T extends JobRunrJob> boolean isKotlinLambda(T lambda) {
-        //return true;
         return stream(lambda.getClass().getAnnotations()).map(Annotation::annotationType).anyMatch(annotationType -> annotationType.getName().equals("kotlin.Metadata"));
     }
 }

@@ -1,0 +1,29 @@
+{
+  "version": 0,
+  "jobSignature": "org.jobrunr.stubs.TestService.doWorkWithPath(sun.nio.fs.UnixPath)",
+  "jobName": "an enqueued job",
+  "labels": [],
+  "jobDetails": {
+    "cacheable": true,
+    "className": "org.jobrunr.stubs.TestService",
+    "methodName": "doWorkWithPath",
+    "jobParameters": [
+      {
+        "className": "java.nio.file.Path",
+        "actualClassName": "sun.nio.fs.UnixPath",
+        "object": "${json-unit.ignore}"
+      }
+    ]
+  },
+  "id": "${json-unit.ignore}",
+  "jobHistory": [
+    {
+      "@class": "org.jobrunr.jobs.states.EnqueuedState",
+      "state": "ENQUEUED",
+      "createdAt": "${json-unit.ignore}"
+    }
+  ],
+  "metadata": {
+    "@class": "java.util.concurrent.ConcurrentHashMap"
+  }
+}

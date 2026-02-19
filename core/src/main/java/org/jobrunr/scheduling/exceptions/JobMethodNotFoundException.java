@@ -4,11 +4,16 @@ import org.jobrunr.jobs.JobDetails;
 
 public class JobMethodNotFoundException extends JobNotFoundException {
 
-    public JobMethodNotFoundException(JobDetails jobDetails) {
-        super(jobDetails);
-    }
-
+    @SuppressWarnings("unused") // Needed for deserialization from FailedState
     public JobMethodNotFoundException(String message) {
         super(message);
+    }
+
+    public JobMethodNotFoundException(String className, String methodName, String[] parameterTypeNames) {
+        super(className, methodName, parameterTypeNames);
+    }
+
+    public JobMethodNotFoundException(JobDetails jobDetails) {
+        super(jobDetails);
     }
 }

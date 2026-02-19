@@ -9,10 +9,13 @@ import java.util.UUID;
 
 public class BackgroundJobServerStatusTestBuilder {
 
+    public static final String DEFAULT_SERVER_NAME = "test-server-name";
+
     private final JobServerStats jobServerStats = new JobServerStats();
     private UUID id = UUID.randomUUID();
+    private String name = DEFAULT_SERVER_NAME;
     private int workerPoolSize = 10;
-    private int pollIntervalInSeconds = BackgroundJobServerConfiguration.DEFAULT_POLL_INTERVAL_IN_SECONDS;
+    private Duration pollInterval = BackgroundJobServerConfiguration.DEFAULT_POLL_INTERVAL;
     private Duration deleteSucceededJobsAfter = BackgroundJobServerConfiguration.DEFAULT_DELETE_SUCCEEDED_JOBS_DURATION;
     private Duration permanentlyDeleteDeletedJobsAfter = BackgroundJobServerConfiguration.DEFAULT_PERMANENTLY_DELETE_JOBS_DURATION;
     private Instant firstHeartbeat;
@@ -35,6 +38,7 @@ public class BackgroundJobServerStatusTestBuilder {
     public static BackgroundJobServerStatusTestBuilder aBackgroundJobServerStatusBasedOn(BackgroundJobServerStatus status) {
         return new BackgroundJobServerStatusTestBuilder()
                 .withId(status.getId())
+                .withName(status.getName())
                 .withWorkerSize(status.getWorkerPoolSize())
                 .withPollIntervalInSeconds(status.getPollIntervalInSeconds())
                 .withRunning(status.isRunning())
@@ -42,15 +46,31 @@ public class BackgroundJobServerStatusTestBuilder {
                 .withLastHeartbeat(status.getLastHeartbeat());
     }
 
+    public BackgroundJobServerStatusTestBuilder withId() {
+        this.id = UUID.randomUUID();
+        return this;
+    }
+
     public BackgroundJobServerStatusTestBuilder withId(UUID id) {
         this.id = id;
         return this;
     }
 
-    public BackgroundJobServerStatusTestBuilder withPollIntervalInSeconds(int pollIntervalInSeconds) {
-        this.pollIntervalInSeconds = pollIntervalInSeconds;
+    public BackgroundJobServerStatusTestBuilder withName(String name) {
+        this.name = name;
         return this;
     }
+
+    public BackgroundJobServerStatusTestBuilder withPollIntervalInSeconds(int pollIntervalInSeconds) {
+        this.pollInterval = Duration.ofSeconds(pollIntervalInSeconds);
+        return this;
+    }
+
+    public BackgroundJobServerStatusTestBuilder withPollInterval(Duration pollInterval) {
+        this.pollInterval = pollInterval;
+        return this;
+    }
+
 
     public BackgroundJobServerStatusTestBuilder withWorkerSize(int workerPoolSize) {
         this.workerPoolSize = workerPoolSize;
@@ -80,7 +100,7 @@ public class BackgroundJobServerStatusTestBuilder {
     }
 
     public BackgroundJobServerStatus build() {
-        return new BackgroundJobServerStatus(id, workerPoolSize, pollIntervalInSeconds,
+        return new BackgroundJobServerStatus(id, name, workerPoolSize, (int) pollInterval.getSeconds(),
                 deleteSucceededJobsAfter, permanentlyDeleteDeletedJobsAfter, firstHeartbeat, lastHeartbeat, running,
                 jobServerStats.getSystemTotalMemory(), jobServerStats.getSystemFreeMemory(), jobServerStats.getSystemCpuLoad(), jobServerStats.getProcessMaxMemory(),
                 jobServerStats.getProcessFreeMemory(), jobServerStats.getProcessAllocatedMemory(), jobServerStats.getProcessCpuLoad());

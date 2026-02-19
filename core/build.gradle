@@ -1,10 +1,17 @@
 import java.text.SimpleDateFormat
 
 plugins {
+    id 'com.github.ben-manes.versions' version '0.53.0'
     id 'java-library'
     id 'java-test-fixtures'
     id 'maven-publish'
-//    id 'signing'
+    id 'signing'
+    id 'idea'
+}
+
+java {
+    withJavadocJar()
+    withSourcesJar()
 }
 
 sourceSets {
@@ -19,13 +26,105 @@ sourceSets {
             exclude '**/package-lock.json'
         }
     }
+    java17 {
+        java.srcDir 'src/main/java17'
+        compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath
+        runtimeClasspath += output + sourceSets.main.output + sourceSets.main.runtimeClasspath
+    }
+    java25 {
+        java.srcDir 'src/main/java25'
+        compileClasspath += sourceSets.main.output + sourceSets.main.compileClasspath
+        runtimeClasspath += output + sourceSets.main.output + sourceSets.main.runtimeClasspath
+    }
+    test {
+        java.srcDir 'src/test/java'
+    }
+    test17 {
+        java.srcDir 'src/test/java17'
+        compileClasspath += sourceSets.main.output + sourceSets.java17.output + configurations.test17CompileClasspath
+        runtimeClasspath += output + sourceSets.main.output + sourceSets.java17.output + configurations.test17RuntimeClasspath
+    }
+    test25 {
+        java.srcDir 'src/test/java25'
+        compileClasspath += sourceSets.main.output + sourceSets.java25.output + configurations.test25CompileClasspath
+        runtimeClasspath += output + sourceSets.main.output + sourceSets.java25.output + configurations.test25RuntimeClasspath
+    }
 }
 
-task myJavadocs(type: Javadoc) {
+configurations {
+    java17Implementation.extendsFrom implementation
+    java17CompileOnly.extendsFrom compileOnly
+    java17RuntimeOnly.extendsFrom runtimeOnly
+    test17Implementation.extendsFrom testImplementation, java17Implementation
+    test17CompileOnly.extendsFrom testCompileOnly, java17CompileOnly
+    test17RuntimeOnly.extendsFrom testRuntimeOnly, java17RuntimeOnly
+
+    java25Implementation.extendsFrom implementation
+    java25CompileOnly.extendsFrom compileOnly
+    java25RuntimeOnly.extendsFrom runtimeOnly
+    test25Implementation.extendsFrom testImplementation, java25Implementation
+    test25CompileOnly.extendsFrom testCompileOnly, java25CompileOnly
+    test25RuntimeOnly.extendsFrom testRuntimeOnly, java25RuntimeOnly
+}
+
+idea {
+    module {
+        testSources.from(sourceSets.test17.java.srcDirs)
+        testSources.from(sourceSets.test25.java.srcDirs)
+    }
+}
+
+tasks.named('compileJava', JavaCompile) {
+    options.release = 8
+}
+tasks.named('compileTestJava', JavaCompile) {
+    options.release = 11
+}
+tasks.named('compileTestFixturesJava', JavaCompile) {
+    options.release = 11
+}
+tasks.named('compileJava17Java', JavaCompile) {
+    options.release = 17
+}
+tasks.named('compileTest17Java', JavaCompile) {
+    options.release = 17
+}
+tasks.named('compileJava25Java', JavaCompile) {
+    options.release = 25
+}
+tasks.named('compileTest25Java', JavaCompile) {
+    options.release = 25
+}
+
+tasks.register('test17', Test) {
+    group = 'verification'
+    testClassesDirs = sourceSets.test17.output.classesDirs
+    classpath = sourceSets.test17.runtimeClasspath
+}
+
+tasks.register('test25', Test) {
+    group = 'verification'
+    testClassesDirs = sourceSets.test25.output.classesDirs
+    classpath = sourceSets.test25.runtimeClasspath
+}
+
+tasks.named('check') {
+    dependsOn 'test17', 'test25'
+}
+
+tasks.register('myJavadocs', Javadoc) {
     source = sourceSets.main.allJava
     classpath = project.sourceSets.main.compileClasspath
     options.links 'https://docs.oracle.com/en/java/javase/11/docs/api/'
 }
+
+tasks.register('runFrontEndDevelopment', JavaExec) {
+    group = "Execution"
+    description = "Run the FrontEnd Development JavaExecTask"
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'org.jobrunr.dashboard.FrontEndDevelopment'
+}
+
 
 dependencies {
     api platform(project(':platform'))
@@ -35,31 +134,32 @@ dependencies {
 
     compileOnly 'com.fasterxml.jackson.core:jackson-databind'
     compileOnly 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310'
+    compileOnly 'tools.jackson.core:jackson-databind'
     compileOnly 'com.google.code.gson:gson'
     compileOnly 'org.eclipse:yasson'
     compileOnly 'io.micrometer:micrometer-core'
 
+    java17CompileOnly 'tools.jackson.core:jackson-databind'
+
     compileOnly 'com.oracle.database.jdbc:ojdbc8'
-    compileOnly 'redis.clients:jedis'
-    compileOnly 'io.lettuce:lettuce-core'
     compileOnly 'org.mongodb:mongodb-driver-sync'
-    compileOnly 'org.elasticsearch.client:elasticsearch-rest-high-level-client'
 
     testImplementation 'org.ow2.asm:asm-util'
     testImplementation 'com.fasterxml.jackson.core:jackson-databind'
     testImplementation 'com.fasterxml.jackson.datatype:jackson-datatype-jsr310'
+    testImplementation 'com.fasterxml.jackson.datatype:jackson-datatype-jdk8'
     testImplementation 'com.google.code.gson:gson'
     testImplementation 'org.eclipse:yasson'
     testImplementation 'io.micrometer:micrometer-core'
     testImplementation 'org.testcontainers:testcontainers'
-    testImplementation 'org.testcontainers:junit-jupiter'
-    testImplementation 'org.testcontainers:mariadb'
-    testImplementation 'org.testcontainers:mssqlserver'
-    testImplementation 'org.testcontainers:mysql'
-    testImplementation 'org.testcontainers:oracle-xe'
-    testImplementation 'org.testcontainers:postgresql'
-    testImplementation 'org.testcontainers:db2'
-    testImplementation 'org.testcontainers:elasticsearch'
+    testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
+    testImplementation 'org.testcontainers:testcontainers-mariadb'
+    testImplementation 'org.testcontainers:testcontainers-mssqlserver'
+    testImplementation 'org.testcontainers:testcontainers-mysql'
+    testImplementation 'org.testcontainers:testcontainers-oracle-free'
+    testImplementation 'org.testcontainers:testcontainers-postgresql'
+    testImplementation 'org.testcontainers:testcontainers-db2'
+    testImplementation 'org.testcontainers:testcontainers-mongodb'
     testImplementation 'org.xerial:sqlite-jdbc'
     testImplementation 'com.h2database:h2'
     testImplementation 'org.postgresql:postgresql'
@@ -68,45 +168,96 @@ dependencies {
     testImplementation 'com.ibm.db2:jcc'
     testImplementation 'com.oracle.database.jdbc:ojdbc8'
     testImplementation 'org.mariadb.jdbc:mariadb-java-client'
-    testImplementation 'mysql:mysql-connector-java'
+    testImplementation 'com.mysql:mysql-connector-j'
     testImplementation 'com.zaxxer:HikariCP'
     testImplementation 'org.apache.commons:commons-dbcp2'
-    testImplementation 'com.mchange:c3p0'
+    testImplementation 'io.agroal:agroal-pool'
     testImplementation 'org.apache.tomcat:tomcat-jdbc'
-    testImplementation 'redis.clients:jedis'
-    testImplementation 'io.lettuce:lettuce-core'
     testImplementation 'org.mongodb:mongodb-driver-sync'
-    testImplementation 'org.elasticsearch.client:elasticsearch-rest-high-level-client'
+    testImplementation 'org.wiremock:wiremock'
+    test17Implementation 'tools.jackson.core:jackson-databind'
 
-    testFixturesApi 'org.assertj:assertj-core'
     testFixturesApi 'org.junit.jupiter:junit-jupiter'
+    testFixturesApi 'org.mockito:mockito-inline'
+    testFixturesApi 'org.mockito:mockito-junit-jupiter'
+    testFixturesApi 'org.assertj:assertj-core'
+    testFixturesApi 'io.github.artsok:rerunner-jupiter'
     testFixturesApi 'org.awaitility:awaitility'
     testFixturesApi 'net.javacrumbs.json-unit:json-unit-assertj'
     testFixturesApi 'ch.qos.logback:logback-classic'
+    testFixturesApi 'org.mongodb:mongodb-driver-sync'
+    testFixturesApi 'io.micrometer:micrometer-core'
+
+    testFixturesCompileOnly 'org.wiremock:wiremock'
 }
 
-java {
-    withJavadocJar()
-    withSourcesJar()
+normalization {
+    runtimeClasspath {
+        ignore '**/MANIFEST.MF'
+        ignore '**/frontend/**'
+    }
 }
 
-compileTestFixturesJava {
-    sourceCompatibility = JavaVersion.VERSION_11
-    targetCompatibility = JavaVersion.VERSION_11
+tasks.register('npmInstall', Exec) {
+    workingDir = file('src/main/resources/org/jobrunr/dashboard/frontend')
+    inputs.file('src/main/resources/org/jobrunr/dashboard/frontend/package.json')
+    inputs.file('src/main/resources/org/jobrunr/dashboard/frontend/package-lock.json')
+    outputs.dir('src/main/resources/org/jobrunr/dashboard/frontend/node_modules')
+    commandLine 'sh', '-c', 'npm ci'
+    outputs.cacheIf { true }
 }
+
+tasks.register('npmRunBuild', Exec) {
+    dependsOn 'npmInstall'
+    workingDir = file('src/main/resources/org/jobrunr/dashboard/frontend')
+    inputs.dir('src/main/resources/org/jobrunr/dashboard/frontend').withPathSensitivity(PathSensitivity.RELATIVE)
+    outputs.dir('src/main/resources/org/jobrunr/dashboard/frontend/build')
+    commandLine 'sh', '-c', 'npm run build'
+    outputs.cacheIf { true }
+}
+
+tasks.register('npmRunTest', Exec) {
+    dependsOn 'npmRunBuild'
+    workingDir = file('src/main/resources/org/jobrunr/dashboard/frontend')
+    inputs.dir('src/main/resources/org/jobrunr/dashboard/frontend').withPathSensitivity(PathSensitivity.RELATIVE)
+    outputs.dir('/tmp/reports/core/frontend')
+    commandLine 'sh', '-c', 'npm run test'
+    outputs.cacheIf { true }
+}
+
+// ⚠️These steps are essential for the frontend to be build and tested properly.
+// Please don't remove, unless you've a different way to achieve the same thing.
+// The steps make sure the tasks are included in the build and test pipeline of gradle.
+//processResources.dependsOn npmRunBuild
+//sourcesJar.dependsOn npmRunBuild
+//test.dependsOn npmRunTest
 
 jar {
+    from(sourceSets.java17.output) {
+        into 'META-INF/versions/17'
+    }
+    from(sourceSets.java25.output) {
+        into 'META-INF/versions/25'
+    }
+
+    def asmVersion = configurations.compileClasspath.incoming.resolutionResult.allComponents.find {
+        it.moduleVersion?.group == 'org.ow2.asm' && it.moduleVersion.name == 'asm'
+    }?.moduleVersion?.version
     exclude('**/dependency-check-bin/', '**/dependency-check-reports/')
     manifest {
-        attributes 'Automatic-Module-Name' : 'org.jobrunr.core'
+        attributes 'Automatic-Module-Name': 'org.jobrunr.core'
+        attributes 'Multi-Release': 'true'
         attributes 'Built-By': 'build.jobrunr.io'
         attributes 'Build-Timestamp': new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSZ").format(new Date())
         attributes 'Build-Version': project.version
+        attributes 'Implementation-Title': 'JobRunr'
         attributes 'Implementation-Version': project.version
         attributes 'Bundle-Version': project.version
         attributes 'Created-By': "Gradle ${gradle.gradleVersion}"
         attributes 'Build-Jdk': "${System.properties['java.version']} (${System.properties['java.vendor']} ${System.properties['java.vm.version']})"
         attributes 'Build-OS': "${System.properties['os.name']} ${System.properties['os.arch']} ${System.properties['os.version']}"
+        attributes 'Minimum-ASM-Version': "${asmVersion}"
+        attributes 'Git-Branch': getGitBranch()
     }
 }
 
@@ -146,7 +297,7 @@ publishing {
                 }
 
                 versionMapping {
-                    usage('java-runtime'){
+                    usage('java-runtime') {
                         fromResolutionResult()
                     }
                 }
@@ -176,10 +327,26 @@ publishing {
     }
 }
 
-//signing {
-//    String base64Key = System.getenv('SIGNING_KEY')
-//    if (base64Key) {
-//        useInMemoryPgpKeys(new String(Base64.decoder.decode(base64Key)), System.getenv('SIGNING_PASSWORD'))
-//        sign publishing.publications.mavenJava
-//    }
-//}
+def getGitBranch() {
+    return providers.exec {
+        commandLine 'git', 'rev-parse', '--abbrev-ref', 'HEAD'
+    }.standardOutput.asText.get().trim()
+}
+
+// this task is executed on the release to check that the UI build output folder is present and fresh
+tasks.register('uiBuildOutputVerification') {
+    doLast {
+        def outputDir = file('src/main/resources/org/jobrunr/dashboard/frontend/build')
+        if (!outputDir.exists()) {
+            throw new GradleException("UI build output missing! This means that the task 'npmRunBuild' hasn't run...")
+        }
+
+        def npmTask = tasks.named('npmRunBuild').get()
+        def npmTaskHasRun = npmTask.state?.executed || npmTask?.state?.upToDate
+        if (!npmTaskHasRun) {
+            throw new GradleException("Task 'npmRunBuild' didn't run! Include it in your build.")
+        }
+
+        println "✓ UI build output validated"
+    }
+}

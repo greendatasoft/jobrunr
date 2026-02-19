@@ -2,15 +2,16 @@ package org.jobrunr.storage.sql.h2;
 
 import org.apache.tomcat.jdbc.pool.DataSource;
 import org.h2.Driver;
-import org.jobrunr.storage.sql.SqlStorageProviderTest;
 import org.junit.jupiter.api.AfterAll;
 
-public class TomcatJdbcPoolH2StorageProviderTest extends SqlStorageProviderTest {
+import java.sql.SQLException;
+
+public class TomcatJdbcPoolH2StorageProviderTest extends AbstractH2StorageProviderTest {
 
     private static DataSource dataSource;
 
     @Override
-    protected DataSource getDataSource() {
+    public DataSource getDataSource() {
         return getDataSource(true);
     }
 
@@ -18,7 +19,7 @@ public class TomcatJdbcPoolH2StorageProviderTest extends SqlStorageProviderTest 
         if (dataSource == null) {
             dataSource = new DataSource();
             dataSource.setDriverClassName(Driver.class.getName());
-            dataSource.setUrl("jdbc:h2:/tmp/test-tomcatjdbcpool");
+            dataSource.setUrl("jdbc:h2:mem:test-tomcat-jdbc;DB_CLOSE_DELAY=-1");
             dataSource.setUsername("sa");
             dataSource.setPassword("sa");
             dataSource.setDefaultAutoCommit(autoCommit);
@@ -27,7 +28,8 @@ public class TomcatJdbcPoolH2StorageProviderTest extends SqlStorageProviderTest 
     }
 
     @AfterAll
-    public static void destroyDatasource() {
+    public static void destroyDatasource() throws SQLException {
+        shutdownDatabase(dataSource);
         dataSource.close();
         dataSource = null;
     }

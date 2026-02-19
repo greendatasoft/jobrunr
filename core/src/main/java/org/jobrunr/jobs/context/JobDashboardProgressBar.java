@@ -13,30 +13,74 @@ public class JobDashboardProgressBar {
     private final JobDashboardProgress jobDashboardProgress;
 
     public JobDashboardProgressBar(Job job, Long totalAmount) {
-        this.jobDashboardProgress = initJobDashboardProgress(job, totalAmount);
+        this(initJobDashboardProgress(job, totalAmount));
     }
 
-    private JobDashboardProgress initJobDashboardProgress(Job job, Long totalAmount) {
+    public JobDashboardProgressBar(JobDashboardProgress jobDashboardProgress) {
+        this.jobDashboardProgress = jobDashboardProgress;
+    }
+
+    public static JobDashboardProgressBar get(Job job) {
+        Map<String, Object> jobMetadata = job.getMetadata();
+        return jobMetadata.keySet().stream().filter(key -> key.startsWith(JOBRUNR_PROGRESSBAR_KEY))
+                .max(String::compareTo)
+                .map(key -> new JobDashboardProgressBar(cast(jobMetadata.get(key))))
+                .orElse(null);
+    }
+
+    private static JobDashboardProgress initJobDashboardProgress(Job job, Long totalAmount) {
         Map<String, Object> jobMetadata = job.getMetadata();
         String progressBarKey = progressBarKey(job.getJobStates().size());
         jobMetadata.putIfAbsent(progressBarKey, new JobDashboardProgress(totalAmount));
         return cast(jobMetadata.get(progressBarKey));
     }
 
-    public void increaseByOne() {
-        jobDashboardProgress.increaseByOne();
+    /**
+     * Allows to increase the progress bar in the dashboard for a normal job using the {@link JobContext}
+     */
+    public void incrementSucceeded() {
+        jobDashboardProgress.incrementSucceeded();
     }
 
-    public int getProgress() {
-        return jobDashboardProgress.getProgress();
+    /**
+     * Allows to increase the failed count of the progress bar in the dashboard for a normal job using the {@link JobContext}
+     */
+    public void incrementFailed() {
+        jobDashboardProgress.incrementFailed();
     }
 
-    public void setValue(int currentProgress) {
-        this.setValue((long) currentProgress);
+    public int getProgressAsPercentage() {
+        return jobDashboardProgress.getProgressAsPercentage();
     }
 
-    public void setValue(long currentProgress) {
-        this.jobDashboardProgress.setCurrentValue(currentProgress);
+    public double getProgressAsRatio() {
+        return jobDashboardProgress.getProgressAsRatio();
+    }
+
+    public long getSucceededAmount() {
+        return jobDashboardProgress.getSucceededAmount();
+    }
+
+    public long getFailedAmount() {
+        return jobDashboardProgress.getFailedAmount();
+    }
+
+    public long getTotalAmount() {
+        return jobDashboardProgress.getTotalAmount();
+    }
+
+    /**
+     * Sets the progress for the ProgressBar on the dashboard and returns if it has changes.
+     *
+     * @param succeededAmount the amount of succeeded items
+     * @return true if the progress has changed, false otherwise
+     */
+    public boolean setProgress(long succeededAmount) {
+        return jobDashboardProgress.setProgress(succeededAmount);
+    }
+
+    public boolean setProgress(long totalAmount, long succeededAmount, long failedAmount) {
+        return this.jobDashboardProgress.setProgress(totalAmount, succeededAmount, failedAmount);
     }
 
     /**
@@ -49,10 +93,11 @@ public class JobDashboardProgressBar {
         return JOBRUNR_PROGRESSBAR_KEY + "-" + jobStateNbr;
     }
 
-    private static class JobDashboardProgress implements JobContext.Metadata {
+    public static class JobDashboardProgress implements JobContext.Metadata {
 
         private Long totalAmount;
-        private Long currentValue;
+        private Long succeededAmount;
+        private Long failedAmount;
         private int progress;
 
         protected JobDashboardProgress() {
@@ -60,22 +105,62 @@ public class JobDashboardProgressBar {
         }
 
         public JobDashboardProgress(Long totalAmount) {
-            if (totalAmount < 1) throw new IllegalArgumentException("The total progress amount must be larger than 0.");
+            if (totalAmount < 0L) throw new IllegalArgumentException("The total progress amount must be positive.");
             this.totalAmount = totalAmount;
-            this.currentValue = 0L;
+            this.succeededAmount = 0L;
+            this.failedAmount = 0L;
+            if (totalAmount == 0) {
+                progress = 100;
+            }
         }
 
-        public void increaseByOne() {
-            setCurrentValue(currentValue + 1);
+        public void incrementSucceeded() {
+            setProgress(succeededAmount + 1);
         }
 
-        public void setCurrentValue(Long currentValue) {
-            this.currentValue = currentValue;
-            this.progress = (int) (currentValue * 100 / totalAmount);
+        public void incrementFailed() {
+            setProgress(this.succeededAmount, failedAmount + 1);
         }
 
-        public int getProgress() {
+        public boolean setProgress(Long succeededAmount) {
+            return setProgress(succeededAmount, this.failedAmount);
+        }
+
+        public boolean setProgress(Long succeededAmount, Long failedAmount) {
+            return setProgress(this.totalAmount, succeededAmount, failedAmount);
+        }
+
+        public boolean setProgress(long totalAmount, long succeededAmount, long failedAmount) {
+            boolean hasChanges = totalAmount < 1L || this.succeededAmount != succeededAmount || this.failedAmount != failedAmount || this.totalAmount != totalAmount;
+            this.totalAmount = totalAmount;
+            this.succeededAmount = succeededAmount;
+            this.failedAmount = failedAmount;
+            this.progress = (succeededAmount >= totalAmount) ? 100 : (int) (succeededAmount * 100 / totalAmount);
+            return hasChanges;
+        }
+
+        public long getSucceededAmount() {
+            return this.succeededAmount;
+        }
+
+        public Long getFailedAmount() {
+            return failedAmount;
+        }
+
+        public int getProgressAsPercentage() {
             return progress;
+        }
+
+        public double getProgressAsRatio() {
+            return totalAmount > 0 ? (double) succeededAmount / totalAmount : 1.0;
+        }
+
+        public boolean hasSucceeded() {
+            return progress == 100;
+        }
+
+        public Long getTotalAmount() {
+            return totalAmount;
         }
     }
 }

@@ -1,28 +1,35 @@
 package org.jobrunr.storage;
 
+import io.github.artsok.RepeatedIfExceptionsTest;
 import org.jobrunr.configuration.JobRunr;
 import org.jobrunr.jobs.Job;
 import org.jobrunr.jobs.JobDetails;
 import org.jobrunr.jobs.RecurringJob;
 import org.jobrunr.jobs.mappers.JobMapper;
 import org.jobrunr.jobs.states.ScheduledState;
+import org.jobrunr.scheduling.carbonaware.CarbonAwarePeriod;
 import org.jobrunr.scheduling.cron.Cron;
-import org.jobrunr.scheduling.cron.CronExpression;
 import org.jobrunr.server.BackgroundJobServer;
+import org.jobrunr.server.BackgroundJobServerConfigurationReader;
+import org.jobrunr.server.LogAllStateChangesFilter;
+import org.jobrunr.storage.Paging.AmountBasedList;
+import org.jobrunr.storage.Paging.OffsetBasedPage;
 import org.jobrunr.storage.listeners.JobStatsChangeListener;
 import org.jobrunr.storage.listeners.MetadataChangeListener;
+import org.jobrunr.storage.navigation.OffsetBasedPageRequest;
 import org.jobrunr.stubs.BackgroundJobServerStub;
 import org.jobrunr.stubs.TestService;
 import org.jobrunr.utils.exceptions.Exceptions;
 import org.jobrunr.utils.mapper.jackson.JacksonJsonMapper;
+import org.junit.jupiter.TestMethodIndexProvider;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.time.Instant;
-import java.time.ZoneId;
-import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -30,9 +37,13 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.IntStream;
 
+import static java.time.Duration.ofHours;
 import static java.time.Instant.now;
 import static java.time.temporal.ChronoUnit.HOURS;
+import static java.time.temporal.ChronoUnit.MICROS;
+import static java.time.temporal.ChronoUnit.SECONDS;
 import static java.util.Arrays.asList;
+import static java.util.Collections.emptyList;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.within;
 import static org.awaitility.Awaitility.await;
@@ -44,32 +55,53 @@ import static org.jobrunr.JobRunrAssertions.failedJob;
 import static org.jobrunr.JobRunrException.shouldNotHappenException;
 import static org.jobrunr.jobs.JobDetailsTestBuilder.defaultJobDetails;
 import static org.jobrunr.jobs.JobDetailsTestBuilder.systemOutPrintLnJobDetails;
-import static org.jobrunr.jobs.JobTestBuilder.*;
+import static org.jobrunr.jobs.JobTestBuilder.aCarbonAwaitingJob;
+import static org.jobrunr.jobs.JobTestBuilder.aCopyOf;
+import static org.jobrunr.jobs.JobTestBuilder.aDeletedJob;
+import static org.jobrunr.jobs.JobTestBuilder.aFailedJob;
+import static org.jobrunr.jobs.JobTestBuilder.aJob;
+import static org.jobrunr.jobs.JobTestBuilder.aJobInProgress;
+import static org.jobrunr.jobs.JobTestBuilder.aScheduledJob;
+import static org.jobrunr.jobs.JobTestBuilder.aSucceededJob;
+import static org.jobrunr.jobs.JobTestBuilder.anEnqueuedJob;
 import static org.jobrunr.jobs.RecurringJobTestBuilder.aDefaultRecurringJob;
-import static org.jobrunr.jobs.states.StateName.*;
+import static org.jobrunr.jobs.states.StateName.DELETED;
+import static org.jobrunr.jobs.states.StateName.ENQUEUED;
+import static org.jobrunr.jobs.states.StateName.PROCESSING;
+import static org.jobrunr.jobs.states.StateName.SCHEDULED;
+import static org.jobrunr.jobs.states.StateName.SUCCEEDED;
+import static org.jobrunr.server.BackgroundJobServerConfiguration.usingStandardBackgroundJobServerConfiguration;
 import static org.jobrunr.storage.BackgroundJobServerStatusTestBuilder.aBackgroundJobServerStatusBasedOn;
 import static org.jobrunr.storage.BackgroundJobServerStatusTestBuilder.aDefaultBackgroundJobServerStatus;
-import static org.jobrunr.storage.PageRequest.ascOnUpdatedAt;
-import static org.jobrunr.storage.PageRequest.descOnUpdatedAt;
 import static org.jobrunr.utils.SleepUtils.sleep;
 import static org.jobrunr.utils.streams.StreamUtils.batchCollector;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.when;
 import static org.mockito.internal.util.reflection.Whitebox.getInternalState;
 import static org.mockito.internal.util.reflection.Whitebox.setInternalState;
 
+@ExtendWith(MockitoExtension.class)
 public abstract class StorageProviderTest {
 
     protected StorageProvider storageProvider;
-    protected StorageProvider throwingStorageProvider;
     protected BackgroundJobServer backgroundJobServer;
     protected JobMapper jobMapper;
 
+    protected BackgroundJobServerConfigurationReader backgroundJobServerConfiguration;
+
     @BeforeEach
     public void cleanUpAndSetupBackgroundJobServer() {
-        cleanup();
+        int testMethodIndex = TestMethodIndexProvider.getTestMethodIndex(this.getClass());
+        cleanup(testMethodIndex);
         final JacksonJsonMapper jsonMapper = new JacksonJsonMapper();
-        JobRunr.configure();
+        JobRunr.configure()
+                .useStorageProvider(getStorageProvider())
+                .initialize();
         storageProvider = getStorageProvider();
-        backgroundJobServer = new BackgroundJobServerStub(storageProvider, jsonMapper);
+        assertThat(storageProvider).isNotNull();
+        backgroundJobServerConfiguration = spy(new BackgroundJobServerConfigurationReader(usingStandardBackgroundJobServerConfiguration()));
+
+        backgroundJobServer = new BackgroundJobServerStub(storageProvider, jsonMapper, backgroundJobServerConfiguration);
         jobMapper = new JobMapper(jsonMapper);
     }
 
@@ -78,7 +110,7 @@ public abstract class StorageProviderTest {
         this.storageProvider.close();
     }
 
-    protected abstract void cleanup();
+    protected abstract void cleanup(int testMethodIndex);
 
     protected abstract StorageProvider getStorageProvider();
 
@@ -93,29 +125,30 @@ public abstract class StorageProviderTest {
 
     @Test
     void testAnnounceAndListBackgroundJobServers() {
-        final BackgroundJobServerStatus serverStatus1 = aDefaultBackgroundJobServerStatus().withIsStarted().build();
+        final BackgroundJobServerStatus serverStatus1 = aDefaultBackgroundJobServerStatus().withName("server-A").withIsStarted().build();
         storageProvider.announceBackgroundJobServer(serverStatus1);
         sleep(100);
 
-        final BackgroundJobServerStatus serverStatus2 = aDefaultBackgroundJobServerStatus().withIsStarted().build();
+        final BackgroundJobServerStatus serverStatus2 = aDefaultBackgroundJobServerStatus().withName("server-B").withIsStarted().build();
         storageProvider.announceBackgroundJobServer(serverStatus2);
         sleep(100);
 
-        storageProvider.signalBackgroundJobServerAlive(aBackgroundJobServerStatusBasedOn(serverStatus2).withLastHeartbeat(Instant.now()).build());
+        storageProvider.signalBackgroundJobServerAlive(aBackgroundJobServerStatusBasedOn(serverStatus2).withLastHeartbeat(now()).build());
         sleep(10);
-        storageProvider.signalBackgroundJobServerAlive(aBackgroundJobServerStatusBasedOn(serverStatus1).withLastHeartbeat(Instant.now()).build());
+        storageProvider.signalBackgroundJobServerAlive(aBackgroundJobServerStatusBasedOn(serverStatus1).withLastHeartbeat(now()).build());
 
         final List<BackgroundJobServerStatus> backgroundJobServers = storageProvider.getBackgroundJobServers();
 
         assertThat(backgroundJobServers).hasSize(2);
         //why: sqlite has no microseconds precision for timestamps
-        assertThat(backgroundJobServers.get(0)).isEqualToComparingOnlyGivenFields(serverStatus1, "id", "workerPoolSize", "pollIntervalInSeconds", "running");
-        assertThat(backgroundJobServers.get(1)).isEqualToComparingOnlyGivenFields(serverStatus2, "id", "workerPoolSize", "pollIntervalInSeconds", "running");
-        assertThat(backgroundJobServers.get(0).getFirstHeartbeat()).isCloseTo(serverStatus1.getFirstHeartbeat(), within(1000, ChronoUnit.MICROS));
+        assertThat(backgroundJobServers.get(0)).usingRecursiveComparison().comparingOnlyFields("id", "workerPoolSize", "pollIntervalInSeconds", "running").isEqualTo(serverStatus1);
+        assertThat(backgroundJobServers.get(1)).usingRecursiveComparison().comparingOnlyFields("id", "workerPoolSize", "pollIntervalInSeconds", "running").isEqualTo(serverStatus2);
+        assertThat(backgroundJobServers.get(0).getFirstHeartbeat()).isCloseTo(serverStatus1.getFirstHeartbeat(), within(1000, MICROS));
         assertThat(backgroundJobServers.get(0).getLastHeartbeat()).isAfter(backgroundJobServers.get(0).getFirstHeartbeat());
-        assertThat(backgroundJobServers.get(1).getFirstHeartbeat()).isCloseTo(serverStatus2.getFirstHeartbeat(), within(1000, ChronoUnit.MICROS));
+        assertThat(backgroundJobServers.get(1).getFirstHeartbeat()).isCloseTo(serverStatus2.getFirstHeartbeat(), within(1000, MICROS));
         assertThat(backgroundJobServers.get(1).getLastHeartbeat()).isAfter(backgroundJobServers.get(1).getFirstHeartbeat());
         assertThat(backgroundJobServers).extracting("id").containsExactly(serverStatus1.getId(), serverStatus2.getId());
+        assertThat(backgroundJobServers).extracting("name").containsExactly(serverStatus1.getName(), serverStatus2.getName());
 
         assertThat(storageProvider.getLongestRunningBackgroundJobServerId()).isEqualTo(serverStatus1.getId());
 
@@ -161,8 +194,10 @@ public abstract class StorageProviderTest {
         // CREATE
         JobRunrMetadata metadata1 = new JobRunrMetadata("shouldNotHappenException", UUID.randomUUID().toString(), Exceptions.getStackTraceAsString(shouldNotHappenException("bad!")));
         JobRunrMetadata metadata2 = new JobRunrMetadata("shouldNotHappenException", UUID.randomUUID().toString(), Exceptions.getStackTraceAsString(shouldNotHappenException("Really bad!")));
+        JobRunrMetadata metadata3 = new JobRunrMetadata("someMetadata", "someKey", Exceptions.getStackTraceAsString(shouldNotHappenException("Really bad!")));
         storageProvider.saveMetadata(metadata1);
         storageProvider.saveMetadata(metadata2);
+        storageProvider.saveMetadata(metadata3);
 
         // LIST
         List<JobRunrMetadata> metadataListAfterCreate = storageProvider.getMetadata("shouldNotHappenException");
@@ -171,6 +206,7 @@ public abstract class StorageProviderTest {
         // GET
         assertThat(storageProvider.getMetadata("shouldNotHappenException", metadata1.getOwner())).isEqualTo(metadata1);
         assertThat(storageProvider.getMetadata("shouldNotHappenException", metadata2.getOwner())).isEqualTo(metadata2);
+        assertThat(storageProvider.getMetadata("someMetadata", "someKey")).isEqualTo(metadata3);
         assertThat(storageProvider.getMetadata("somethingThatDoesNotExist", UUID.randomUUID().toString())).isNull();
 
         // UPDATE
@@ -182,12 +218,18 @@ public abstract class StorageProviderTest {
         List<JobRunrMetadata> metadataListAfterUpdate = storageProvider.getMetadata("shouldNotHappenException");
         assertThat(metadataListAfterUpdate).hasSize(2);
 
-        // DEL
+        // DELETE by name
         storageProvider.deleteMetadata("shouldNotHappenException");
 
         // LIST
         List<JobRunrMetadata> metadataListAfterDelete = storageProvider.getMetadata("shouldNotHappenException");
         assertThat(metadataListAfterDelete).isEmpty();
+
+        // DELETE by name and owner
+        storageProvider.deleteMetadata("someMetadata", "someKey");
+
+        // GET
+        assertThat(storageProvider.getMetadata("someMetadata", "someKey")).isNull();
     }
 
     @Test
@@ -212,73 +254,70 @@ public abstract class StorageProviderTest {
         Job createdJob = storageProvider.save(scheduledJob);
         Job savedScheduledJob = storageProvider.getJobById(createdJob.getId());
         assertThat(savedScheduledJob).isEqualTo(createdJob);
-        assertThatJobs(storageProvider.getScheduledJobs(Instant.now(), ascOnUpdatedAt(1000))).contains(createdJob);
-        assertThat(storageProvider.exists(scheduledJob.getJobDetails(), SCHEDULED)).isTrue();
+        assertThatJobs(storageProvider.getScheduledJobs(now(), AmountBasedList.ascOnUpdatedAt(1000))).contains(createdJob);
 
         // ENQUEUE
         savedScheduledJob.enqueue();
         storageProvider.save(savedScheduledJob);
         Job savedEnqueuedJob = storageProvider.getJobById(createdJob.getId());
         assertThat(savedEnqueuedJob).isEqualTo(savedScheduledJob);
-        assertThatJobs(storageProvider.getScheduledJobs(Instant.now(), ascOnUpdatedAt(1000))).isEmpty();
-        assertThatJobs(storageProvider.getJobs(ENQUEUED, ascOnUpdatedAt(1000))).contains(savedEnqueuedJob);
-        assertThat(storageProvider.exists(scheduledJob.getJobDetails(), SCHEDULED)).isFalse();
-        assertThat(storageProvider.exists(scheduledJob.getJobDetails(), ENQUEUED)).isTrue();
+        assertThatJobs(storageProvider.getScheduledJobs(now(), AmountBasedList.ascOnUpdatedAt(1000))).isEmpty();
+        assertThatJobs(storageProvider.getJobList(ENQUEUED, AmountBasedList.ascOnUpdatedAt(1000))).contains(savedEnqueuedJob);
 
         // PROCESSING
         savedEnqueuedJob.startProcessingOn(backgroundJobServer);
         storageProvider.save(savedEnqueuedJob);
         Job savedProcessingJob = storageProvider.getJobById(createdJob.getId());
         assertThat(savedProcessingJob).isEqualTo(savedEnqueuedJob);
-        assertThatJobs(storageProvider.getJobs(ENQUEUED, ascOnUpdatedAt(1000))).isEmpty();
-        assertThatJobs(storageProvider.getJobs(PROCESSING, ascOnUpdatedAt(1000))).contains(savedProcessingJob);
+        assertThatJobs(storageProvider.getJobList(ENQUEUED, AmountBasedList.ascOnUpdatedAt(1000))).isEmpty();
+        assertThatJobs(storageProvider.getJobList(PROCESSING, AmountBasedList.ascOnUpdatedAt(1000))).contains(savedProcessingJob);
 
         // FAILED & RESCHEDULED
         savedProcessingJob.failed("A failure", new RuntimeException());
-        savedProcessingJob.scheduleAt(Instant.now(), "Job failed");
+        savedProcessingJob.scheduleAt(now(), "Job failed");
         storageProvider.save(savedProcessingJob);
         Job savedRescheduledJob = storageProvider.getJobById(createdJob.getId());
         assertThat(savedRescheduledJob).isEqualTo(savedProcessingJob);
-        assertThatJobs(storageProvider.getScheduledJobs(Instant.now(), ascOnUpdatedAt(1000))).contains(savedRescheduledJob);
-        assertThatJobs(storageProvider.getJobs(PROCESSING, ascOnUpdatedAt(1000))).isEmpty();
+        assertThatJobs(storageProvider.getScheduledJobs(now(), AmountBasedList.ascOnUpdatedAt(1000))).contains(savedRescheduledJob);
+        assertThatJobs(storageProvider.getJobList(PROCESSING, AmountBasedList.ascOnUpdatedAt(1000))).isEmpty();
 
         // ENQUEUED
         savedRescheduledJob.enqueue();
         storageProvider.save(savedRescheduledJob);
         Job savedEnqueuedJobRetry = storageProvider.getJobById(createdJob.getId());
         assertThat(savedEnqueuedJobRetry).isEqualTo(savedRescheduledJob);
-        assertThatJobs(storageProvider.getScheduledJobs(Instant.now(), ascOnUpdatedAt(1000))).isEmpty();
-        assertThatJobs(storageProvider.getJobs(ENQUEUED, ascOnUpdatedAt(1000))).contains(savedEnqueuedJobRetry);
+        assertThatJobs(storageProvider.getScheduledJobs(now(), AmountBasedList.ascOnUpdatedAt(1000))).isEmpty();
+        assertThatJobs(storageProvider.getJobList(ENQUEUED, AmountBasedList.ascOnUpdatedAt(1000))).contains(savedEnqueuedJobRetry);
 
         // PROCESSING
         savedEnqueuedJobRetry.startProcessingOn(backgroundJobServer);
         storageProvider.save(savedEnqueuedJobRetry);
         Job savedProcessingJobRetry = storageProvider.getJobById(createdJob.getId());
         assertThat(savedProcessingJobRetry).isEqualTo(savedEnqueuedJobRetry);
-        assertThatJobs(storageProvider.getJobs(ENQUEUED, ascOnUpdatedAt(1000))).isEmpty();
-        assertThatJobs(storageProvider.getJobs(PROCESSING, ascOnUpdatedAt(1000))).contains(savedProcessingJobRetry);
+        assertThatJobs(storageProvider.getJobList(ENQUEUED, AmountBasedList.ascOnUpdatedAt(1000))).isEmpty();
+        assertThatJobs(storageProvider.getJobList(PROCESSING, AmountBasedList.ascOnUpdatedAt(1000))).contains(savedProcessingJobRetry);
 
         // SUCCEEDED
         savedProcessingJobRetry.succeeded();
         storageProvider.save(savedProcessingJobRetry);
         Job savedSucceededJob = storageProvider.getJobById(createdJob.getId());
         assertThat(savedSucceededJob).isEqualTo(savedProcessingJobRetry);
-        assertThatJobs(storageProvider.getJobs(PROCESSING, ascOnUpdatedAt(1000))).isEmpty();
-        assertThatJobs(storageProvider.getJobs(SUCCEEDED, ascOnUpdatedAt(1000))).contains(savedSucceededJob);
+        assertThatJobs(storageProvider.getJobList(PROCESSING, AmountBasedList.ascOnUpdatedAt(1000))).isEmpty();
+        assertThatJobs(storageProvider.getJobList(SUCCEEDED, AmountBasedList.ascOnUpdatedAt(1000))).contains(savedSucceededJob);
 
         // DELETED
         savedSucceededJob.delete("By test");
         storageProvider.save(savedSucceededJob);
         Job fetchedDeletedJob = storageProvider.getJobById(createdJob.getId());
         assertThat(fetchedDeletedJob).hasState(DELETED);
-        assertThatJobs(storageProvider.getJobs(SUCCEEDED, ascOnUpdatedAt(1000))).isEmpty();
-        assertThatJobs(storageProvider.getJobs(DELETED, ascOnUpdatedAt(1000))).contains(fetchedDeletedJob);
+        assertThatJobs(storageProvider.getJobList(SUCCEEDED, AmountBasedList.ascOnUpdatedAt(1000))).isEmpty();
+        assertThatJobs(storageProvider.getJobList(DELETED, AmountBasedList.ascOnUpdatedAt(1000))).contains(fetchedDeletedJob);
 
         // DELETED PERMANENTLY
         final int permanentlyDeletedJobs = storageProvider.deletePermanently(createdJob.getId());
         assertThat(permanentlyDeletedJobs).isEqualTo(1);
         assertThatThrownBy(() -> storageProvider.getJobById(savedEnqueuedJob.getId())).isInstanceOf(JobNotFoundException.class);
-        assertThatJobs(storageProvider.getJobs(DELETED, ascOnUpdatedAt(1000))).isEmpty();
+        assertThatJobs(storageProvider.getJobList(DELETED, AmountBasedList.ascOnUpdatedAt(1000))).isEmpty();
     }
 
     @Test
@@ -301,6 +340,16 @@ public abstract class StorageProviderTest {
     }
 
     @Test
+    void testOptimisticLockingOnSaveJobForJobThatWasDeleted() {
+        Job job = anEnqueuedJob().build();
+        storageProvider.save(job);
+        storageProvider.deletePermanently(job.getId());
+        job.succeeded();
+        assertThatThrownBy(() -> storageProvider.save(job))
+                .isInstanceOf(ConcurrentJobModificationException.class);
+    }
+
+    @Test
     void testSaveOfJobWithSameId() {
         UUID id = UUID.randomUUID();
         Job job1 = anEnqueuedJob().withId(id).build();
@@ -316,13 +365,19 @@ public abstract class StorageProviderTest {
         Job enqueuedJob = storageProvider.save(job);
 
         job.startProcessingOn(backgroundJobServer);
-        try(ThrowingStorageProvider ignored = makeThrowingStorageProvider(storageProvider)) {
+        try (ThrowingStorageProvider ignored = makeThrowingStorageProvider(storageProvider)) {
             assertThatThrownBy(() -> storageProvider.save(enqueuedJob))
                     .isInstanceOf(StorageException.class);
         }
 
         job.updateProcessing();
         assertThatCode(() -> storageProvider.save(enqueuedJob)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void noExceptionOnSaveOfEmptyJobs() {
+        assertThatCode(() -> storageProvider.save(emptyList()))
+                .doesNotThrowAnyException();
     }
 
     @Test
@@ -347,10 +402,118 @@ public abstract class StorageProviderTest {
                 .has(failedJob(createdJob3));
 
         assertThat(asList(createdJob1, createdJob4)).allMatch(dbJob -> dbJob.getVersion() == 2);
-        assertThat(asList(createdJob2, createdJob3)).allMatch(dbJob -> dbJob.getVersion() == 1);
+        assertThat(asList(createdJob2, createdJob3)).allMatch(dbJob -> dbJob.getVersion() == 1); // as we don't know the version in the DB, we keep the original version
+
+        assertThat(storageProvider.getJobById(createdJob1.getId())).hasVersion(2); // save all jobs failed so has version 1
+        assertThat(storageProvider.getJobById(createdJob2.getId())).hasVersion(2); // already saved with succeeded state and has version 2
+        assertThat(storageProvider.getJobById(createdJob3.getId())).hasVersion(2); // already saved with deleted state and has version 2
+        assertThat(storageProvider.getJobById(createdJob4.getId())).hasVersion(2); // save all jobs failed so has version 1
     }
 
+    @Test
+    void testGetJobsToProcessReturnsJobInProcessingStateAndCallFilters() {
+        // GIVEN
+        Job scheduledJob = aScheduledJob().build();
+        Job enqueuedJob1 = aJob().withEnqueuedState(now().minusSeconds(20)).build();
+        Job enqueuedJob2 = aJob().withEnqueuedState(now().minusSeconds(15)).build();
+        Job enqueuedJob3 = aJob().withEnqueuedState(now().minusSeconds(10)).build();
+        Job enqueuedJob4 = aJob().withEnqueuedState(now().minusSeconds(5)).build();
+        Job jobInProgress = aJobInProgress().build();
+        Job succeededJob = aSucceededJob().build();
+        Job failedJob = aFailedJob().build();
+        Job deletedJob = aDeletedJob().build();
+        storageProvider.save(asList(scheduledJob, enqueuedJob1, enqueuedJob2, enqueuedJob3, enqueuedJob4, jobInProgress, succeededJob, failedJob, deletedJob));
 
+        LogAllStateChangesFilter logAllStateChangesFilter = new LogAllStateChangesFilter();
+        backgroundJobServer.setJobFilters(List.of(logAllStateChangesFilter));
+
+        // WHEN
+        List<Job> jobsToProcess1 = storageProvider.getJobsToProcess(backgroundJobServer, AmountBasedList.ascOnUpdatedAt(3));
+
+        // THEN
+        assertThatJobs(jobsToProcess1)
+                .hasSize(3)
+                .allMatch(job -> job.hasState(PROCESSING))
+                .containsExactlyComparingById(enqueuedJob1, enqueuedJob2, enqueuedJob3);
+        assertThat(logAllStateChangesFilter.getAllStateChanges()).containsOnly("ENQUEUED->PROCESSING");
+
+        // WHEN
+        List<Job> jobsToProcess2 = storageProvider.getJobsToProcess(backgroundJobServer, AmountBasedList.ascOnUpdatedAt(3));
+
+        // THEN
+        assertThatJobs(jobsToProcess2)
+                .hasSize(1)
+                .allMatch(job -> job.hasState(PROCESSING))
+                .containsExactlyComparingById(enqueuedJob4);
+        assertThat(logAllStateChangesFilter.getAllStateChanges()).containsOnly("ENQUEUED->PROCESSING");
+    }
+
+    @Test
+    void testGetJobsToProcessTakesStateElectionFiltersIntoAccount() {
+        // GIVEN
+        Job scheduledJob = aScheduledJob().build();
+        Job enqueuedJob1 = aJob().withEnqueuedState(now().minusSeconds(20)).build();
+        Job enqueuedJob2 = aJob().withJobDetails(TestService::tryToDoWorkButDontBecauseOfSomeBusinessRuleDefinedInTheOnStateElectionFilter).withEnqueuedState(now().minusSeconds(15)).build();
+        Job enqueuedJob3 = aJob().withEnqueuedState(now().minusSeconds(10)).build();
+        Job enqueuedJob4 = aJob().withEnqueuedState(now().minusSeconds(5)).build();
+        Job jobInProgress = aJobInProgress().build();
+        Job succeededJob = aSucceededJob().build();
+        Job failedJob = aFailedJob().build();
+        Job deletedJob = aDeletedJob().build();
+        storageProvider.save(asList(scheduledJob, enqueuedJob1, enqueuedJob2, enqueuedJob3, enqueuedJob4, jobInProgress, succeededJob, failedJob, deletedJob));
+
+        LogAllStateChangesFilter logAllStateChangesFilter = new LogAllStateChangesFilter();
+        backgroundJobServer.setJobFilters(List.of(logAllStateChangesFilter));
+
+        // WHEN
+        List<Job> jobsToProcess = storageProvider.getJobsToProcess(backgroundJobServer, AmountBasedList.ascOnUpdatedAt(3));
+
+        // THEN
+        assertThatJobs(jobsToProcess)
+                .hasSize(2)
+                .allMatch(job -> job.hasState(PROCESSING))
+                .containsExactlyComparingById(enqueuedJob1, enqueuedJob3);
+        assertThat(logAllStateChangesFilter.getStateChanges(enqueuedJob1))
+                .containsOnly("ENQUEUED->PROCESSING");
+        assertThat(logAllStateChangesFilter.getStateChanges(enqueuedJob2))
+                .containsOnly("ENQUEUED->PROCESSING", "PROCESSING->DELETED", "DELETED->SCHEDULED");
+        assertThat(logAllStateChangesFilter.getStateChanges(enqueuedJob3))
+                .containsOnly("ENQUEUED->PROCESSING");
+    }
+
+    @Test
+    void testGetJobsToProcessOnExceptionReturnsJobInProcessingStateAndCallFilters() {
+        // GIVEN
+        UUID backgroundJobServerId = UUID.randomUUID();
+        Job scheduledJob = aScheduledJob().build();
+        Job enqueuedJob1 = aJob().withEnqueuedState(now().minusSeconds(20)).build();
+        Job enqueuedJob2 = aJob().withEnqueuedState(now().minusSeconds(15)).build();
+        Job enqueuedJob3 = aJob().withEnqueuedState(now().minusSeconds(10)).build();
+        Job enqueuedJob4 = aJob().withEnqueuedState(now().minusSeconds(5)).build();
+        Job jobInProgress = aJobInProgress().build();
+        Job succeededJob = aSucceededJob().build();
+        Job failedJob = aFailedJob().build();
+        Job deletedJob = aDeletedJob().build();
+        storageProvider.save(asList(scheduledJob, enqueuedJob1, enqueuedJob2, enqueuedJob3, enqueuedJob4, jobInProgress, succeededJob, failedJob, deletedJob));
+
+        LogAllStateChangesFilter logAllStateChangesFilter = new LogAllStateChangesFilter();
+        backgroundJobServer.setJobFilters(List.of(logAllStateChangesFilter));
+        // simulate concurrent JobModification Exception
+        when(backgroundJobServerConfiguration.getId())
+                .thenReturn(backgroundJobServerId)
+                .thenReturn(backgroundJobServerId)
+                .thenThrow(new ConcurrentJobModificationException(enqueuedJob3));
+
+        // WHEN
+        List<Job> jobsToProcess = storageProvider.getJobsToProcess(backgroundJobServer, AmountBasedList.ascOnUpdatedAt(3));
+
+        // THEN
+        assertThatJobs(jobsToProcess)
+                .hasSize(2)
+                .allMatch(job -> job.hasState(PROCESSING))
+                .containsExactlyComparingById(enqueuedJob1, enqueuedJob2);
+        assertThat(logAllStateChangesFilter.getAllStateChanges()).containsOnly("ENQUEUED->PROCESSING");
+    }
 
     @Test
     void testGetDistinctJobSignatures() {
@@ -380,7 +543,7 @@ public abstract class StorageProviderTest {
         assertThat(distinctJobSignaturesForJobsInProgress)
                 .hasSize(1)
                 .containsOnly(
-                        "org.jobrunr.stubs.TestService.doWork(java.lang.Integer,java.lang.Integer)");
+                        "org.jobrunr.stubs.TestService.doWork(java.lang.Integer, java.lang.Integer)");
 
         Set<String> distinctJobSignaturesForSucceededJobs = storageProvider.getDistinctJobSignatures(SUCCEEDED);
         assertThat(distinctJobSignaturesForSucceededJobs)
@@ -398,50 +561,48 @@ public abstract class StorageProviderTest {
     }
 
     @Test
-    void testExists() {
+    void testGetRecurringJobLatestScheduledInstant() {
+        Instant now = Instant.now();
         JobDetails jobDetails = defaultJobDetails().build();
         RecurringJob recurringJob = aDefaultRecurringJob().withJobDetails(jobDetails).build();
-        Job scheduledJob = recurringJob.toScheduledJob();
+        Job succeededJob = recurringJob.toScheduledJobs(now.minus(ofHours(26)), now.minus(ofHours(26)).plusSeconds(15)).get(0);
+        Job scheduledJob = recurringJob.toScheduledJobs(now, now.plusSeconds(15)).get(0);
 
-        storageProvider.save(scheduledJob);
-        assertThat(storageProvider.exists(jobDetails, SCHEDULED, ENQUEUED, PROCESSING, SUCCEEDED)).isTrue();
-        assertThat(storageProvider.exists(jobDetails, SCHEDULED)).isTrue();
-        assertThat(storageProvider.exists(jobDetails, ENQUEUED, PROCESSING, SUCCEEDED)).isFalse();
+        storageProvider.save(asList(succeededJob, scheduledJob));
 
-        Job enqueuedJob = recurringJob.toEnqueuedJob();
-        storageProvider.save(enqueuedJob);
-        assertThat(storageProvider.exists(jobDetails, SCHEDULED, ENQUEUED, PROCESSING, SUCCEEDED)).isTrue();
-        assertThat(storageProvider.exists(jobDetails, SCHEDULED)).isTrue();
-        assertThat(storageProvider.exists(jobDetails, ENQUEUED)).isTrue();
-        assertThat(storageProvider.exists(jobDetails, PROCESSING, SUCCEEDED)).isFalse();
+        Instant succeededJobScheduledAt = ((ScheduledState) succeededJob.getJobState()).getScheduledAt();
+        Instant scheduledJobScheduledAt = ((ScheduledState) scheduledJob.getJobState()).getScheduledAt();
 
-        scheduledJob.delete("For test");
-        storageProvider.save(scheduledJob);
-        assertThat(storageProvider.exists(jobDetails, SCHEDULED, PROCESSING, SUCCEEDED)).isFalse();
-        assertThat(storageProvider.exists(jobDetails, ENQUEUED, DELETED)).isTrue();
-    }
+        succeededJob.enqueue();
+        succeededJob.startProcessingOn(backgroundJobServer);
+        succeededJob.succeeded();
+        storageProvider.save(succeededJob);
 
-    @Test
-    void testRecurringJobExists() {
-        JobDetails jobDetails = defaultJobDetails().build();
-        RecurringJob recurringJob = aDefaultRecurringJob().withJobDetails(jobDetails).build();
-        Job scheduledJob = recurringJob.toScheduledJob();
-
-        storageProvider.save(scheduledJob);
-        assertThat(storageProvider.recurringJobExists(recurringJob.getId(), SCHEDULED, ENQUEUED, PROCESSING, SUCCEEDED)).isTrue();
-        assertThat(storageProvider.recurringJobExists(recurringJob.getId(), SCHEDULED)).isTrue();
-        assertThat(storageProvider.recurringJobExists(recurringJob.getId(), ENQUEUED, PROCESSING, SUCCEEDED)).isFalse();
+        assertThat(storageProvider.getRecurringJobLatestScheduledInstant(recurringJob.getId())).isEqualTo(scheduledJobScheduledAt);
+        assertThat(storageProvider.getRecurringJobLatestScheduledInstant(recurringJob.getId(), SCHEDULED, ENQUEUED, PROCESSING, SUCCEEDED)).isEqualTo(scheduledJobScheduledAt);
+        assertThat(storageProvider.getRecurringJobLatestScheduledInstant(recurringJob.getId(), SCHEDULED)).isEqualTo(scheduledJobScheduledAt);
+        assertThat(storageProvider.getRecurringJobLatestScheduledInstant(recurringJob.getId(), ENQUEUED, PROCESSING, SUCCEEDED)).isEqualTo(succeededJobScheduledAt);
 
         scheduledJob.enqueue();
         storageProvider.save(scheduledJob);
-        assertThat(storageProvider.recurringJobExists(recurringJob.getId(), SCHEDULED, ENQUEUED, PROCESSING, SUCCEEDED)).isTrue();
-        assertThat(storageProvider.recurringJobExists(recurringJob.getId(), ENQUEUED)).isTrue();
-        assertThat(storageProvider.recurringJobExists(recurringJob.getId(), SCHEDULED, PROCESSING, SUCCEEDED)).isFalse();
+        assertThat(storageProvider.getRecurringJobLatestScheduledInstant(recurringJob.getId(), SCHEDULED, ENQUEUED, PROCESSING, SUCCEEDED)).isEqualTo(scheduledJobScheduledAt);
+        assertThat(storageProvider.getRecurringJobLatestScheduledInstant(recurringJob.getId(), ENQUEUED)).isEqualTo(scheduledJobScheduledAt);
+        assertThat(storageProvider.getRecurringJobLatestScheduledInstant(recurringJob.getId(), SCHEDULED, PROCESSING, SUCCEEDED)).isEqualTo(succeededJobScheduledAt);
+
+        scheduledJob.startProcessingOn(backgroundJobServer);
+        scheduledJob.succeeded();
+        storageProvider.save(scheduledJob);
+        assertThat(storageProvider.getRecurringJobLatestScheduledInstant(recurringJob.getId(), SCHEDULED, ENQUEUED, PROCESSING, SUCCEEDED)).isEqualTo(scheduledJobScheduledAt);
+        assertThat(storageProvider.getRecurringJobLatestScheduledInstant(recurringJob.getId(), ENQUEUED, PROCESSING, DELETED)).isNull();
 
         scheduledJob.delete("For test");
         storageProvider.save(scheduledJob);
-        assertThat(storageProvider.recurringJobExists(recurringJob.getId(), SCHEDULED, PROCESSING, SUCCEEDED)).isFalse();
-        assertThat(storageProvider.recurringJobExists(recurringJob.getId(), ENQUEUED, DELETED)).isTrue();
+        assertThat(storageProvider.getRecurringJobLatestScheduledInstant(recurringJob.getId(), SCHEDULED, PROCESSING, SUCCEEDED)).isEqualTo(succeededJobScheduledAt);
+        assertThat(storageProvider.getRecurringJobLatestScheduledInstant(recurringJob.getId(), ENQUEUED, DELETED)).isEqualTo(scheduledJobScheduledAt);
+
+        storageProvider.deletePermanently(scheduledJob.getId());
+        storageProvider.deletePermanently(succeededJob.getId());
+        assertThat(storageProvider.getRecurringJobLatestScheduledInstant(recurringJob.getId())).isNull();
     }
 
     @Test
@@ -464,13 +625,13 @@ public abstract class StorageProviderTest {
         assertThat(storageProvider).hasJobs(ENQUEUED, 0);
         assertThat(storageProvider).hasJobs(PROCESSING, 3);
 
-        List<Job> fetchedJobsAsc = storageProvider.getJobs(PROCESSING, ascOnUpdatedAt(100));
+        List<Job> fetchedJobsAsc = storageProvider.getJobList(PROCESSING, AmountBasedList.ascOnUpdatedAt(100));
         assertThatJobs(fetchedJobsAsc)
                 .hasSize(3)
                 .containsAll(savedJobs);
         assertThat(fetchedJobsAsc).extracting("jobName").containsExactly("1", "2", "3");
 
-        List<Job> fetchedJobsDesc = storageProvider.getJobs(PROCESSING, descOnUpdatedAt(100));
+        List<Job> fetchedJobsDesc = storageProvider.getJobList(PROCESSING, AmountBasedList.descOnUpdatedAt(100));
         assertThatJobs(fetchedJobsDesc)
                 .hasSize(3)
                 .containsAll(savedJobs);
@@ -487,7 +648,7 @@ public abstract class StorageProviderTest {
         final List<Job> savedJobs = storageProvider.save(jobs);
         savedJobs.forEach(job -> job.startProcessingOn(backgroundJobServer));
 
-        try(ThrowingStorageProvider ignored = makeThrowingStorageProvider(storageProvider)) {
+        try (ThrowingStorageProvider ignored = makeThrowingStorageProvider(storageProvider)) {
             assertThatThrownBy(() -> storageProvider.save(savedJobs))
                     .isInstanceOf(StorageException.class);
         }
@@ -508,12 +669,12 @@ public abstract class StorageProviderTest {
 
         storageProvider.save(jobs);
 
-        Page<Job> fetchedJobsAscOnPriorityAndAscOnCreated = storageProvider.getJobPage(ENQUEUED, ascOnUpdatedAt(50));
+        Page<Job> fetchedJobsAscOnPriorityAndAscOnCreated = storageProvider.getJobs(ENQUEUED, OffsetBasedPage.ascOnUpdatedAt(50));
         assertThatJobs(fetchedJobsAscOnPriorityAndAscOnCreated.getItems())
                 .hasSize(5)
                 .containsExactly(jobs.get(0), jobs.get(1), jobs.get(2), jobs.get(3), jobs.get(4));
 
-        Page<Job> fetchedJobsDescOnUpdatedAt = storageProvider.getJobPage(ENQUEUED, descOnUpdatedAt(50));
+        Page<Job> fetchedJobsDescOnUpdatedAt = storageProvider.getJobs(ENQUEUED, OffsetBasedPage.descOnUpdatedAt(50));
         assertThatJobs(fetchedJobsDescOnUpdatedAt.getItems())
                 .hasSize(5)
                 .containsExactly(jobs.get(4), jobs.get(3), jobs.get(2), jobs.get(1), jobs.get(0));
@@ -531,12 +692,12 @@ public abstract class StorageProviderTest {
 
         storageProvider.save(jobs);
 
-        Page<Job> fetchedJobsAsc = storageProvider.getJobPage(ENQUEUED, ascOnUpdatedAt(2, 2));
+        Page<Job> fetchedJobsAsc = storageProvider.getJobs(ENQUEUED, OffsetBasedPage.ascOnUpdatedAt(2, 2));
         assertThatJobs(fetchedJobsAsc.getItems())
                 .hasSize(2)
                 .containsExactly(jobs.get(2), jobs.get(3));
 
-        Page<Job> fetchedJobsDesc = storageProvider.getJobPage(ENQUEUED, descOnUpdatedAt(2, 2));
+        Page<Job> fetchedJobsDesc = storageProvider.getJobs(ENQUEUED, OffsetBasedPage.descOnUpdatedAt(2, 2));
         assertThatJobs(fetchedJobsDesc.getItems())
                 .hasSize(2)
                 .containsExactly(jobs.get(2), jobs.get(1));
@@ -552,19 +713,19 @@ public abstract class StorageProviderTest {
         );
         storageProvider.save(jobs);
 
-        assertThatJobs(storageProvider.getJobs(ENQUEUED, now().minus(3, HOURS), ascOnUpdatedAt(100)))
+        assertThatJobs(storageProvider.getJobList(ENQUEUED, now().minus(3, HOURS), AmountBasedList.ascOnUpdatedAt(100)))
                 .hasSize(2)
                 .containsExactly(jobs.get(0), jobs.get(1));
 
-        assertThatJobs(storageProvider.getJobs(ENQUEUED, now().minus(1, HOURS), ascOnUpdatedAt(100)))
+        assertThatJobs(storageProvider.getJobList(ENQUEUED, now().minus(1, HOURS), AmountBasedList.ascOnUpdatedAt(100)))
                 .hasSize(3)
                 .containsExactly(jobs.get(0), jobs.get(1), jobs.get(2));
 
-        assertThatJobs(storageProvider.getJobs(ENQUEUED, now().minus(1, HOURS), descOnUpdatedAt(100)))
+        assertThatJobs(storageProvider.getJobList(ENQUEUED, now().minus(1, HOURS), AmountBasedList.descOnUpdatedAt(100)))
                 .hasSize(3)
                 .containsExactly(jobs.get(2), jobs.get(1), jobs.get(0));
 
-        assertThatJobs(storageProvider.getJobs(PROCESSING, now().minus(1, HOURS), ascOnUpdatedAt(100)))
+        assertThatJobs(storageProvider.getJobList(PROCESSING, now().minus(1, HOURS), AmountBasedList.ascOnUpdatedAt(100)))
                 .isEmpty();
     }
 
@@ -581,9 +742,39 @@ public abstract class StorageProviderTest {
 
         storageProvider.deleteJobsPermanently(ENQUEUED, now().minus(1, HOURS));
 
-        List<Job> fetchedJobs = storageProvider.getJobs(ENQUEUED, ascOnUpdatedAt(100));
+        List<Job> fetchedJobs = storageProvider.getJobList(ENQUEUED, AmountBasedList.ascOnUpdatedAt(100));
 
         assertThat(fetchedJobs).hasSize(1);
+    }
+
+    @Test
+    void testGetCarbonAwareJobsList() {
+        final List<Job> jobs = storageProvider.save(asList(
+                aJob().withCarbonAwareAwaitingState(CarbonAwarePeriod.before(now().plus(4, HOURS))).build(),
+                aJob().withCarbonAwareAwaitingState(CarbonAwarePeriod.before(now().plus(12, HOURS))).build(),
+                aJob().withCarbonAwareAwaitingState(CarbonAwarePeriod.before(now().plus(36, HOURS))).build(),
+                aJob().withCarbonAwareAwaitingState(CarbonAwarePeriod.before(now().plus(48, HOURS))).build()
+        ));
+
+        assertThatJobs(storageProvider.getCarbonAwareJobList(now().plus(3, HOURS), AmountBasedList.ascOnScheduledAt(100)))
+                .hasSize(0);
+        assertThatJobs(storageProvider.getCarbonAwareJobList(now().plus(5, HOURS), AmountBasedList.ascOnScheduledAt(100)))
+                .hasSize(1)
+                .containsExactly(jobs.get(0));
+        assertThatJobs(storageProvider.getCarbonAwareJobList(now().plus(50, HOURS), AmountBasedList.ascOnScheduledAt(100)))
+                .hasSize(4)
+                .containsExactly(jobs.get(0), jobs.get(1), jobs.get(2), jobs.get(3));
+        assertThatJobs(storageProvider.getCarbonAwareJobList(now().plus(50, HOURS), AmountBasedList.ascOnScheduledAt(1)))
+                .hasSize(1)
+                .containsExactly(jobs.get(0));
+
+        Job existingCarbonAwareJob = jobs.get(0);
+        existingCarbonAwareJob.scheduleAt(Instant.now(), "test");
+        storageProvider.save(existingCarbonAwareJob);
+
+        assertThatJobs(storageProvider.getCarbonAwareJobList(now().plus(50, HOURS), AmountBasedList.ascOnScheduledAt(100)))
+                .hasSize(3)
+                .containsExactly(jobs.get(1), jobs.get(2), jobs.get(3));
     }
 
     @Test
@@ -594,79 +785,103 @@ public abstract class StorageProviderTest {
 
         storageProvider.save(jobs);
 
-        assertThatJobs(storageProvider.getScheduledJobs(now().plus(5, ChronoUnit.SECONDS), ascOnUpdatedAt(100)))
+        assertThatJobs(storageProvider.getScheduledJobs(now().plus(5, SECONDS), AmountBasedList.ascOnUpdatedAt(100)))
                 .hasSize(1)
                 .contains(job1);
+    }
+
+    @Test
+    void testScheduledJobsPage() {
+        Job job1 = anEnqueuedJob().withState(new ScheduledState(now())).build();
+        Job job2 = anEnqueuedJob().withState(new ScheduledState(now().plusSeconds(1))).build();
+        Job job3 = anEnqueuedJob().withState(new ScheduledState(now().plusSeconds(2))).build();
+        final List<Job> jobs = asList(job1, job2, job3);
+
+        storageProvider.save(jobs);
+
+        Page<Job> jobPage1 = storageProvider.getScheduledJobs(now().plus(5, SECONDS), OffsetBasedPage.ascOnUpdatedAt(2));
+
+        assertThatJobs(jobPage1.getItems())
+                .hasSize(2)
+                .contains(job1, job2);
+
+        Page<Job> jobPage2 = storageProvider.getScheduledJobs(now().plus(5, SECONDS), OffsetBasedPageRequest.fromString(jobPage1.getNextPageRequest()));
+
+        assertThatJobs(jobPage2.getItems())
+                .hasSize(1)
+                .contains(job3);
     }
 
     @Test
     void testCRUDRecurringJobLifeCycle() {
         assertThat(storageProvider.recurringJobsUpdated(0L)).isFalse();
 
-        RecurringJob recurringJobv1 = new RecurringJob("my-job", defaultJobDetails().build(), CronExpression.create(Cron.daily()), ZoneId.systemDefault());
+        RecurringJob recurringJobv1 = aDefaultRecurringJob().withId("my-job").withCronExpression(Cron.daily()).build();
         storageProvider.saveRecurringJob(recurringJobv1);
         assertThat(storageProvider.recurringJobsUpdated(0L)).isTrue();
         RecurringJobsResult recurringJobsResult1 = storageProvider.getRecurringJobs();
         assertThat(recurringJobsResult1).hasSize(1);
         await().untilAsserted(() -> assertThat(storageProvider.recurringJobsUpdated(recurringJobsResult1.getLastModifiedHash())).isFalse());
-        assertThat(storageProvider.countRecurringJobs()).isEqualTo(1);
 
 
-        RecurringJob recurringJobv2 = new RecurringJob("my-job", defaultJobDetails().build(), CronExpression.create(Cron.hourly()), ZoneId.systemDefault());
+        RecurringJob recurringJobv2 = aDefaultRecurringJob().withId("my-job").withCronExpression(Cron.hourly()).build();
         storageProvider.saveRecurringJob(recurringJobv2);
 
         await().untilAsserted(() -> assertThat(storageProvider.recurringJobsUpdated(recurringJobsResult1.getLastModifiedHash())).isTrue());
         RecurringJobsResult recurringJobsResult2 = storageProvider.getRecurringJobs();
         assertThat(recurringJobsResult2).hasSize(1);
         await().untilAsserted(() -> assertThat(storageProvider.recurringJobsUpdated(recurringJobsResult2.getLastModifiedHash())).isFalse());
-        assertThat(storageProvider.countRecurringJobs()).isEqualTo(1);
 
         assertThat(storageProvider.getRecurringJobs().get(0).getScheduleExpression()).isEqualTo(Cron.hourly());
 
-        RecurringJob otherRecurringJob = new RecurringJob("my-other-job", defaultJobDetails().build(), CronExpression.create(Cron.hourly()), ZoneId.systemDefault());
+        RecurringJob otherRecurringJob = aDefaultRecurringJob().withId("my-other-job").withCronExpression(Cron.hourly()).build();
         storageProvider.saveRecurringJob(otherRecurringJob);
         await().untilAsserted(() -> assertThat(storageProvider.recurringJobsUpdated(recurringJobsResult2.getLastModifiedHash())).isTrue());
         RecurringJobsResult recurringJobsResult3 = storageProvider.getRecurringJobs();
         assertThat(recurringJobsResult3).hasSize(2);
         await().untilAsserted(() -> assertThat(storageProvider.recurringJobsUpdated(recurringJobsResult3.getLastModifiedHash())).isFalse());
-        assertThat(storageProvider.countRecurringJobs()).isEqualTo(2);
 
-        storageProvider.deleteRecurringJob("my-job");
+        int deleted = storageProvider.deleteRecurringJob("my-job");
+        assertThat(deleted).isEqualTo(1);
         await().untilAsserted(() -> assertThat(storageProvider.recurringJobsUpdated(recurringJobsResult3.getLastModifiedHash())).isTrue());
         RecurringJobsResult recurringJobsResult4 = storageProvider.getRecurringJobs();
         assertThat(recurringJobsResult4).hasSize(1);
         await().untilAsserted(() -> assertThat(storageProvider.recurringJobsUpdated(recurringJobsResult4.getLastModifiedHash())).isFalse());
+
+        // DELETE NON EXISTENT RECURRING JOB
+        int deletedForNonExistingJob = storageProvider.deleteRecurringJob("non-existing-recurring-job");
+        assertThat(deletedForNonExistingJob).isEqualTo(0);
     }
 
-    @Test
+    @RepeatedIfExceptionsTest(repeats = 3)
     void testOnChangeListenerForSaveAndDeleteJob() {
         final SimpleJobStorageOnChangeListener onChangeListener = new SimpleJobStorageOnChangeListener();
         storageProvider.addJobStorageOnChangeListener(onChangeListener);
 
         Job job = anEnqueuedJob().build();
         storageProvider.save(job);
-        assertThat(onChangeListener.changes).hasSize(1);
+        await().untilAsserted(() -> assertThat(onChangeListener.changes).hasSize(1));
 
         job.delete("For test");
         storageProvider.save(job);
-        assertThat(onChangeListener.changes).hasSize(2);
+        await().untilAsserted(() -> assertThat(onChangeListener.changes).hasSize(2));
     }
 
-    @Test
+    @RepeatedIfExceptionsTest(repeats = 3)
     void testOnChangeListenerForSaveJobList() {
         final SimpleJobStorageOnChangeListener onChangeListener = new SimpleJobStorageOnChangeListener();
         storageProvider.addJobStorageOnChangeListener(onChangeListener);
 
         final List<Job> jobs = asList(anEnqueuedJob().build(), anEnqueuedJob().build());
         storageProvider.save(jobs);
-        assertThat(onChangeListener.changes).hasSize(1);
+        await().untilAsserted(() -> assertThat(onChangeListener.changes).hasSize(1));
 
         jobs.forEach(job -> job.startProcessingOn(backgroundJobServer));
         storageProvider.save(jobs);
-        assertThat(onChangeListener.changes).hasSize(2);
+        await().untilAsserted(() -> assertThat(onChangeListener.changes).hasSize(2));
     }
 
-    @Test
+    @RepeatedIfExceptionsTest(repeats = 3)
     void testOnChangeListenerForDeleteJobsByState() {
         storageProvider.save(asList(anEnqueuedJob().build(), anEnqueuedJob().build()));
 
@@ -675,7 +890,7 @@ public abstract class StorageProviderTest {
 
         storageProvider.deleteJobsPermanently(ENQUEUED, now());
 
-        assertThat(onChangeListener.changes).hasSize(1);
+        await().untilAsserted(() -> assertThat(onChangeListener.changes).hasSize(1));
     }
 
     @Test
@@ -686,6 +901,7 @@ public abstract class StorageProviderTest {
 
         storageProvider.publishTotalAmountOfSucceededJobs(5);
         storageProvider.save(asList(
+                aCarbonAwaitingJob().build(),
                 anEnqueuedJob().build(),
                 anEnqueuedJob().build(),
                 anEnqueuedJob().build(),
@@ -700,6 +916,7 @@ public abstract class StorageProviderTest {
         storageProvider.saveRecurringJob(aDefaultRecurringJob().withId("id2").build());
 
         final JobStats jobStats = storageProvider.getJobStats();
+        assertThat(jobStats.getAwaiting()).isEqualTo(1);
         assertThat(jobStats.getScheduled()).isEqualTo(1);
         assertThat(jobStats.getEnqueued()).isEqualTo(3);
         assertThat(jobStats.getProcessing()).isEqualTo(1);
@@ -711,11 +928,12 @@ public abstract class StorageProviderTest {
         assertThat(jobStats.getBackgroundJobServers()).isEqualTo(1);
     }
 
+
     @Test
     @Disabled
     void testPerformance() {
         int amount = 1000000;
-        IntStream.range(0, amount)
+        var ignored = IntStream.range(0, amount)
                 .peek(i -> {
                     if (i % 10000 == 0) {
                         System.out.println("Saving job " + i);
@@ -726,7 +944,7 @@ public abstract class StorageProviderTest {
 
         AtomicInteger atomicInteger = new AtomicInteger();
         storageProvider
-                .getJobs(ENQUEUED, ascOnUpdatedAt(10000))
+                .getJobList(ENQUEUED, AmountBasedList.ascOnUpdatedAt(10000))
                 .stream()
                 .parallel()
                 .peek(job -> {
@@ -769,7 +987,7 @@ public abstract class StorageProviderTest {
     public static abstract class ThrowingStorageProvider implements AutoCloseable {
 
         private final StorageProvider storageProvider;
-        private String fieldNameForReset;
+        private final String fieldNameForReset;
         private Object originalState;
 
         public ThrowingStorageProvider(StorageProvider storageProvider, String fieldNameForReset) {
@@ -784,6 +1002,7 @@ public abstract class StorageProviderTest {
             }
         }
 
+        @Override
         public void close() {
             resetStorageProviderUsingInternalState(storageProvider);
         }

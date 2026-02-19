@@ -2,7 +2,7 @@ package org.jobrunr.storage.sql.sqlite;
 
 import org.jobrunr.storage.StorageProviderUtils.DatabaseOptions;
 import org.jobrunr.storage.sql.common.DefaultSqlStorageProvider;
-import org.jobrunr.storage.sql.common.db.dialect.AnsiDialect;
+import org.jobrunr.storage.sql.common.db.AnsiDialect;
 
 import javax.sql.DataSource;
 
@@ -22,7 +22,7 @@ public class SqLiteStorageProvider extends DefaultSqlStorageProvider {
     }
 
     public SqLiteStorageProvider(DataSource dataSource, DatabaseOptions databaseOptions) {
-        super(dataSource, new AnsiDialect(), databaseOptions);
+        this(dataSource, null, databaseOptions);
     }
 
     public SqLiteStorageProvider(DataSource dataSource, String tablePrefix, DatabaseOptions databaseOptions) {

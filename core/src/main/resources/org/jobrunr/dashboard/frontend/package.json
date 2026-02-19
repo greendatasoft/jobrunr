@@ -2,27 +2,27 @@
   "name": "JobRunr",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "homepage": "",
-  "proxy": "http://localhost:8000",
   "dependencies": {
-    "@material-ui/core": "^4.11.4",
-    "@material-ui/icons": "^4.11.2",
-    "@material-ui/lab": "^4.0.0-alpha.58",
-    "apexcharts": "^3.26.1",
-    "cronstrue": "^1.112.0",
-    "mdi-material-ui": "^6.22.1",
-    "react": "^16.14.0",
-    "react-apexcharts": "^1.3.9",
-    "react-dom": "^16.14.0",
-    "react-highlight": "^0.14.0",
-    "react-router-dom": "^5.2.0",
-    "react-scripts": "^4.0.3",
-    "react-timeago": "^5.2.0"
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.1",
+    "@mui/icons-material": "^7.3.7",
+    "@mui/material": "^7.3.7",
+    "apexcharts": "^5.3.6",
+    "cronstrue": "^3.9.0",
+    "mdi-material-ui": "^7.9.4",
+    "react": "^19.2.3",
+    "react-apexcharts": "^1.9.0",
+    "react-dom": "^19.2.3",
+    "react-router": "^7.12.0",
+    "react-syntax-highlighter": "^16.1.0",
+    "react-timeago": "^8.3.0"
   },
   "scripts": {
-    "start": "react-scripts start",
-    "build": "react-scripts build",
-    "test": "react-scripts test",
+    "start": "rsbuild dev",
+    "build": "rsbuild build",
+    "test": "jest --ci",
     "eject": "react-scripts eject",
     "owasp": "owasp-dependency-check --project \"JobRunr\" -f HTML JSON"
   },
@@ -42,8 +42,16 @@
     ]
   },
   "devDependencies": {
-    "cypress": "^4.12.1",
-    "cypress-failed-log": "^2.7.0",
-    "owasp-dependency-check": "^0.0.17"
+    "@rsbuild/core": "^1.7.2",
+    "@rsbuild/plugin-react": "^1.4.3",
+    "@rsbuild/plugin-svgr": "^1.2.4",
+    "@swc/core": "^1.15.10",
+    "@swc/jest": "^0.2.39",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "jest": "^30.2.0",
+    "jest-environment-jsdom": "^30.2.0",
+    "jest-junit": "^16.0.0",
+    "owasp-dependency-check": "^0.0.25"
   }
 }

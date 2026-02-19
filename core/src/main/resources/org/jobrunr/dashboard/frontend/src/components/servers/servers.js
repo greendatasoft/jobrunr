@@ -1,69 +1,55 @@
-import React from 'react';
-import Link from '@material-ui/core/Link';
-import Typography from '@material-ui/core/Typography';
-import Table from '@material-ui/core/Table';
-import TableBody from '@material-ui/core/TableBody';
-import TableCell from '@material-ui/core/TableCell';
-import TableContainer from '@material-ui/core/TableContainer';
-import TableHead from '@material-ui/core/TableHead';
-import TableRow from '@material-ui/core/TableRow';
-import Paper from '@material-ui/core/Paper';
-import TimeAgo from "react-timeago/lib";
-import Box from "@material-ui/core/Box";
-import {makeStyles} from '@material-ui/core/styles';
+import {memo, useEffect, useState} from 'react';
+import {keyframes, styled} from "@mui/material/styles";
+import Link from '@mui/material/Link';
+import Typography from '@mui/material/Typography';
+import Table from '@mui/material/Table';
+import TableBody from '@mui/material/TableBody';
+import TableCell from '@mui/material/TableCell';
+import TableContainer from '@mui/material/TableContainer';
+import TableHead from '@mui/material/TableHead';
+import TableRow from '@mui/material/TableRow';
+import Paper from '@mui/material/Paper';
+import TimeAgo from "react-timeago";
+import Box from "@mui/material/Box";
 import {CogClockwise} from "mdi-material-ui";
-import NotInterestedIcon from '@material-ui/icons/NotInterested';
-import Dialog from '@material-ui/core/Dialog';
-import MuiDialogTitle from '@material-ui/core/DialogTitle';
-import MuiDialogContent from '@material-ui/core/DialogContent';
+import NotInterestedIcon from '@mui/icons-material/NotInterested';
+import Dialog from '@mui/material/Dialog';
+import MuiDialogTitle from '@mui/material/DialogTitle';
+import MuiDialogContent from '@mui/material/DialogContent';
 import {humanFileSize} from "../../utils/helper-functions";
-import LoadingIndicator from "../LoadingIndicator";
 import VersionFooter from "../utils/version-footer";
+import {ItemsNotFound} from "../utils/items-not-found";
+import {useServers} from "../../hooks/useServers";
+import {openEventSource} from "../../stores/serversStore";
 
-const useStyles = makeStyles(theme => ({
-    table: {
-        width: '100%',
-    },
-    root: {
-        width: '100%',
-        backgroundColor: theme.palette.background.paper,
-    },
-    noItemsFound: {
-        padding: '1rem'
-    },
-    idColumn: {
-        maxWidth: 0,
-        width: '15%',
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-        whiteSpace: 'nowrap',
-    },
-    inline: {
-        display: 'inline',
-    },
-    spin: {
-        animationName: '$spin',
-        animationDuration: '5000ms',
-        animationIterationCount: 'infinite',
-        animationTimingFunction: 'linear'
-    },
-    "@keyframes spin": {
-        from: {
-            transform: 'rotate(0deg)'
-        },
-        to: {
-            transform: 'rotate(360deg)'
-        }
+const spin = keyframes`
+    from {
+        transform: rotate(0deg)
     }
+    to {
+        transform: rotate(360deg)
+    }
+`;
+
+const StyledCogClockwise = styled(CogClockwise)(() => ({
+    animationName: spin,
+    animationDuration: '5000ms',
+    animationIterationCount: 'infinite',
+    animationTimingFunction: 'linear'
 }));
 
-const Servers = React.memo(() => {
-    const classes = useStyles();
+const IdColumn = styled(TableCell)`
+    width: 15%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: pointer;
+`;
 
-    const [isLoading, setIsLoading] = React.useState(true);
-    const [servers, setServers] = React.useState([]);
-    const [open, setOpen] = React.useState(false);
-    const [currentServer, setCurrentServer] = React.useState(null);
+const Servers = memo(() => {
+    const [servers, _] = useServers();
+    const [open, setOpen] = useState(false);
+    const [currentServer, setCurrentServer] = useState(null);
 
     const handleOpen = (server) => {
         setCurrentServer(server);
@@ -75,113 +61,98 @@ const Servers = React.memo(() => {
         setCurrentServer(null);
     };
 
-
-    React.useEffect(() => {
-        fetch(`/api/servers`)
-            .then(res => res.json())
-            .then(response => {
-                setServers(sortServers(response));
-                setIsLoading(false);
-            })
-            .catch(error => console.log(error));
-
-        const eventSource = new EventSource(process.env.REACT_APP_SSE_URL + "/servers");
-        eventSource.addEventListener('message', e => setServers(sortServers(JSON.parse(e.data))));
-        eventSource.addEventListener('close', e => eventSource.close());
-        return function cleanUp() {
-            eventSource.close();
-        }
+    useEffect(() => {
+        return openEventSource();
     }, []);
-
-    const sortServers = (servers) => {
-        return [...servers].sort((a, b) => a.firstHeartbeat > b.firstHeartbeat);
-    }
 
     return (
         <div>
             <Box my={3}>
                 <Typography variant="h4">Background Job Servers</Typography>
             </Box>
-            {isLoading
-                ? <LoadingIndicator/>
-                : <>
-                    <Paper className={classes.paper}>
-                        {servers.length < 1
-                            ? <Typography variant="body1" className={classes.noItemsFound}>No servers found</Typography>
-                            : <>
-                                <TableContainer>
-                                    <Table className={classes.table} aria-label="servers overview">
-                                        <TableHead>
-                                            <TableRow>
-                                                <TableCell className={classes.idColumn}>Id</TableCell>
-                                                <TableCell>Workers</TableCell>
-                                                <TableCell>Created</TableCell>
-                                                <TableCell>Last heartbeat</TableCell>
-                                                <TableCell>Free memory</TableCell>
-                                                <TableCell>Cpu load</TableCell>
-                                                <TableCell>Running?</TableCell>
-                                                {/*<TableCell>Actions</TableCell>*/}
-                                            </TableRow>
-                                        </TableHead>
-                                        <TableBody>
-                                            {servers.map(server => (
-                                                <TableRow key={server.id}>
-                                                    <TableCell component="th" scope="row" className={classes.idColumn}>
-                                                        <Link color="initial" onClick={() => handleOpen(server)}>
-                                                            {server.id}
-                                                        </Link>
-                                                    </TableCell>
-                                                    <TableCell>
-                                                        {server.workerPoolSize}
-                                                    </TableCell>
-                                                    <TableCell>
-                                                        <TimeAgo date={new Date(server.firstHeartbeat)}
-                                                                 title={new Date(server.firstHeartbeat).toString()}/>
-                                                    </TableCell>
-                                                    <TableCell>
-                                                        <TimeAgo date={new Date(server.lastHeartbeat)}
-                                                                 title={new Date(server.lastHeartbeat).toString()}/>
-                                                    </TableCell>
-                                                    <TableCell>
-                                                        {humanFileSize(server.processFreeMemory, true)}
-                                                    </TableCell>
-                                                    <TableCell>
-                                                        {(server.systemCpuLoad * 100).toFixed(2)} %
-                                                    </TableCell>
-                                                    <TableCell>
-                                                        {server.running
-                                                            ? <CogClockwise className={classes.spin}/>
-                                                            : <NotInterestedIcon/>
-                                                        }
-                                                    </TableCell>
-                                                    {/*<TableCell>*/}
-                                                    {/*    {server.running*/}
-                                                    {/*        ? <Pause />*/}
-                                                    {/*        : <Play />*/}
-                                                    {/*    }*/}
-                                                    {/*</TableCell>*/}
-                                                </TableRow>
-                                            ))}
-                                        </TableBody>
-                                    </Table>
-                                </TableContainer>
-                            </>
-                        }
-                    </Paper>
-                    <VersionFooter/>
-                </>
-            }
+            <Paper>
+                {servers.length < 1
+                    ? <ItemsNotFound>No servers found</ItemsNotFound>
+                    : <>
+                        <TableContainer>
+                            <Table style={{width: "100%"}} aria-label="servers overview">
+                                <TableHead>
+                                    <TableRow>
+                                        <IdColumn style={{cursor: "initial"}}>Id</IdColumn>
+                                        <TableCell>Name</TableCell>
+                                        <TableCell>Workers</TableCell>
+                                        <TableCell>Created</TableCell>
+                                        <TableCell>Last heartbeat</TableCell>
+                                        <TableCell>Free memory</TableCell>
+                                        <TableCell>Cpu load</TableCell>
+                                        <TableCell>Running?</TableCell>
+                                        {/*<TableCell>Actions</TableCell>*/}
+                                    </TableRow>
+                                </TableHead>
+                                <TableBody>
+                                    {servers.map(server => (
+                                        <TableRow key={server.id}>
+                                            <IdColumn component="th" scope="row">
+                                                <Link onClick={() => handleOpen(server)} underline="hover">
+                                                    {server.id}
+                                                </Link>
+                                            </IdColumn>
+                                            <TableCell style={{cursor: 'pointer'}}>
+                                                <Link onClick={() => handleOpen(server)} underline="hover">
+                                                    {server.name}
+                                                </Link>
+                                            </TableCell>
+                                            <TableCell>
+                                                {server.workerPoolSize}
+                                            </TableCell>
+                                            <TableCell>
+                                                <TimeAgo date={new Date(server.firstHeartbeat)}
+                                                         title={new Date(server.firstHeartbeat).toString()}/>
+                                            </TableCell>
+                                            <TableCell>
+                                                <TimeAgo date={new Date(server.lastHeartbeat)}
+                                                         title={new Date(server.lastHeartbeat).toString()}/>
+                                            </TableCell>
+                                            <TableCell>
+                                                {humanFileSize(server.processFreeMemory, true)}
+                                            </TableCell>
+                                            <TableCell>
+                                                {(server.systemCpuLoad * 100).toFixed(2)} %
+                                            </TableCell>
+                                            <TableCell>
+                                                {server.running
+                                                    ? <StyledCogClockwise/>
+                                                    : <NotInterestedIcon/>
+                                                }
+                                            </TableCell>
+                                        </TableRow>
+                                    ))}
+                                </TableBody>
+                            </Table>
+                        </TableContainer>
+                    </>
+                }
+            </Paper>
+            <VersionFooter/>
 
             {currentServer &&
-                <Dialog onClose={handleClose} aria-labelledby="customized-dialog-title" open={open}>
+                <Dialog fullWidth maxWidth="sm" scroll="paper" onClose={handleClose}
+                        aria-labelledby="customized-dialog-title" open={open}>
                     <MuiDialogTitle id="customized-dialog-title" onClose={handleClose}>
-                        Server info
-                        <Typography variant="body1">{currentServer.id}</Typography>
+                        Server info <code>{currentServer.id}</code>
                     </MuiDialogTitle>
                     <MuiDialogContent dividers>
                         <TableContainer>
-                            <Table className={classes.table} aria-label="simple table">
+                            <Table style={{width: "100%"}} aria-label="simple table">
                                 <TableBody>
+                                    <TableRow>
+                                        <TableCell>
+                                            Name
+                                        </TableCell>
+                                        <TableCell>
+                                            {currentServer.name}
+                                        </TableCell>
+                                    </TableRow>
                                     <TableRow>
                                         <TableCell>
                                             WorkerPoolSize

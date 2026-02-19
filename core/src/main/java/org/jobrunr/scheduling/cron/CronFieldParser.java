@@ -93,14 +93,12 @@ class CronFieldParser {
             if (token.length() == 2 && token.endsWith("l")) {
                 return this.parseLiteral(token.substring(0, 1));
             }
-        } else if (this.fieldType == CronFieldType.DAY) {
-            if ("l".equals(token)) {
-                return fieldType.parseLastDayOfMonth();
-            }
+        } else if (this.fieldType == CronFieldType.DAY && "l".equals(token)) {
+            return fieldType.parseLastDayOfMonth();
         }
         if (token.indexOf(',') > -1) {
             BitSet bitSet = new BitSet(this.length);
-            String[] items = token.split(",");
+            String[] items = token.split(",", 0);
             for (String item : items) {
                 bitSet.or(this.parse(item));
             }
@@ -122,7 +120,7 @@ class CronFieldParser {
 
     private BitSet parseStep(String token) {
         try {
-            String[] tokenParts = token.split("/");
+            String[] tokenParts = token.split("/", 0);
             if (tokenParts.length != 2) {
                 throw new InvalidCronExpressionException(String.format(INVALID_FIELD, this.fieldName, token));
             }
@@ -139,7 +137,8 @@ class CronFieldParser {
             }
             BitSet numSet = this.parse(numSetPart);
             BitSet stepsSet = new BitSet(this.length);
-            for (int i = numSet.nextSetBit(0); i < this.length; i += stepSize) {
+            int bound = fieldType == CronFieldType.MONTH ? this.length + 1 : this.length;
+            for (int i = numSet.nextSetBit(0); i < bound; i += stepSize) {
                 stepsSet.set(i);
             }
             stepsSet.and(numSet);
@@ -150,7 +149,7 @@ class CronFieldParser {
     }
 
     private BitSet parseRange(String token) {
-        String[] rangeParts = token.split("-");
+        String[] rangeParts = token.split("-", 0);
         if (rangeParts.length != 2) {
             throw new InvalidCronExpressionException(String.format(INVALID_FIELD, this.fieldName, token));
         }

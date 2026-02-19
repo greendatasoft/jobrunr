@@ -8,8 +8,14 @@ import java.lang.reflect.Field;
 
 public class Whitebox {
 
+    @SuppressWarnings("unchecked")
     public static <T> T getInternalState(Object target, String field) {
-        Class<?> c = target.getClass();
+        Class<?> c = null;
+        if (target instanceof Class) {
+            c = (Class<?>) target;
+        } else {
+            c = target.getClass();
+        }
         try {
             Field f = getFieldFromHierarchy(c, field);
             f.setAccessible(true);

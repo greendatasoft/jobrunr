@@ -9,7 +9,7 @@ import java.util.concurrent.TimeUnit;
 
 public class GCUtils {
 
-    private static Logger LOGGER = LoggerFactory.getLogger(GCUtils.class);
+    private static final Logger LOGGER = LoggerFactory.getLogger(GCUtils.class);
 
     public static void simulateStopTheWorldGC(long howLongInMillis) {
         LOGGER.info("Starting simulation stop the world GC for {} sec", TimeUnit.MILLISECONDS.toSeconds(howLongInMillis));
@@ -45,6 +45,7 @@ public class GCUtils {
          * This method tries to allocate maximum available memory in runtime,
          * and is catching an OutOfMemoryError.
          */
+        @SuppressWarnings("ModifiedButNotUsed")
         public static void tryToAllocateAllAvailableMemory() {
             try {
                 final List<Object[]> allocations = new ArrayList<>();

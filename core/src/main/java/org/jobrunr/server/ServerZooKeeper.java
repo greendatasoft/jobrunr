@@ -10,10 +10,12 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.util.Arrays;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
+
+import static org.jobrunr.server.DesktopUtils.hasSystemSleptRecently;
+import static org.jobrunr.server.DesktopUtils.systemSupportsSleepDetection;
 
 public class ServerZooKeeper implements Runnable {
 
@@ -32,15 +34,18 @@ public class ServerZooKeeper implements Runnable {
         this.backgroundJobServer = backgroundJobServer;
         this.storageProvider = backgroundJobServer.getStorageProvider();
         this.dashboardNotificationManager = backgroundJobServer.getDashboardNotificationManager();
-        this.timeoutDuration = Duration.ofSeconds(backgroundJobServer.getServerStatus().getPollIntervalInSeconds()).multipliedBy(4);
+        this.timeoutDuration = backgroundJobServer.getConfiguration().getPollInterval().multipliedBy(backgroundJobServer.getConfiguration().getServerTimeoutPollIntervalMultiplicand());
         this.restartAttempts = new AtomicInteger();
         this.lastSignalAlive = Instant.now();
         this.lastServerTimeoutCheck = Instant.now();
+        LOGGER.trace(systemSupportsSleepDetection()
+                ? "JobRunr can detect desktop sleeping."
+                : "JobRunr can not detect desktop sleeping.");
     }
 
     @Override
     public void run() {
-        if (backgroundJobServer.isStopped()) return;
+        if (backgroundJobServer.isStopping() || backgroundJobServer.isStopped()) return;
 
         try {
             if (backgroundJobServer.isUnAnnounced()) {
@@ -58,7 +63,7 @@ public class ServerZooKeeper implements Runnable {
         try {
             storageProvider.signalBackgroundJobServerStopped(backgroundJobServer.getServerStatus());
         } catch (Exception e) {
-            LOGGER.error("Error when signalling that BackgroundJobServer stopped", e);
+            LOGGER.error("Error when signalling that {} stopped", backgroundJobServer, e);
         } finally {
             masterId = null;
         }
@@ -77,15 +82,14 @@ public class ServerZooKeeper implements Runnable {
             deleteServersThatTimedOut();
             determineIfCurrentBackgroundJobServerIsMaster();
         } catch (ServerTimedOutException e) {
-            LOGGER.error("SEVERE ERROR - Server timed out while it's still alive. Are all servers using NTP and in the same timezone? Are you having long GC cycles? Restart attempt {}", restartAttempts.incrementAndGet());
+            LOGGER.error("SEVERE ERROR - {} timed out while it's still alive. Are all servers using NTP and in the same timezone? Are you having long GC cycles? Restart attempt {} out of 3", backgroundJobServer, restartAttempts.incrementAndGet(), e);
             new Thread(this::resetServer).start();
         }
     }
 
     private void signalBackgroundJobServerAlive() {
-        // TODO: stop server if requested?
         final BackgroundJobServerStatus serverStatus = backgroundJobServer.getServerStatus();
-        final boolean keepRunning = storageProvider.signalBackgroundJobServerAlive(serverStatus);
+        storageProvider.signalBackgroundJobServerAlive(serverStatus);
         cpuAllocationIrregularity(lastSignalAlive, serverStatus.getLastHeartbeat()).ifPresent(amountOfSeconds -> dashboardNotificationManager.notify(new CpuAllocationIrregularityNotification(amountOfSeconds)));
         lastSignalAlive = serverStatus.getLastHeartbeat();
     }
@@ -121,10 +125,8 @@ public class ServerZooKeeper implements Runnable {
 
     private void resetServer() {
         LOGGER.info("Resetting BackgroundJobServer");
-
         backgroundJobServer.stop();
         backgroundJobServer.start();
-
         LOGGER.info("BackgroundJobServer has been reset");
     }
 
@@ -133,19 +135,19 @@ public class ServerZooKeeper implements Runnable {
     }
 
     private static Instant min(Instant instant1, Instant instant2) {
-        Instant[] instants = new Instant[]{instant1, instant2};
-        Arrays.sort(instants);
-        return instants[0];
+        return instant1.isBefore(instant2) ? instant1 : instant2;
     }
 
     private Optional<Integer> cpuAllocationIrregularity(Instant lastSignalAlive, Instant lastHeartbeat) {
+        if (systemSupportsSleepDetection() && hasSystemSleptRecently()) return Optional.empty();
+
         final Instant now = Instant.now();
         final int amount1OfSec = (int) Math.abs(lastHeartbeat.getEpochSecond() - lastSignalAlive.getEpochSecond());
         final int amount2OfSec = (int) (now.getEpochSecond() - lastSignalAlive.getEpochSecond());
         final int amount3OfSec = (int) (now.getEpochSecond() - lastHeartbeat.getEpochSecond());
 
         final int max = Math.max(amount1OfSec, Math.max(amount2OfSec, amount3OfSec));
-        if (max > backgroundJobServer.getServerStatus().getPollIntervalInSeconds() * 2L) {
+        if (max > backgroundJobServer.getConfiguration().getPollInterval().getSeconds() * 2L) {
             return Optional.of(max);
         }
         return Optional.empty();

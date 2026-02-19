@@ -5,6 +5,7 @@ import org.jobrunr.jobs.context.JobRunrDashboardLogger;
 import org.jobrunr.jobs.filters.JobPerformingFilters;
 import org.jobrunr.jobs.mappers.MDCMapper;
 import org.jobrunr.jobs.states.IllegalJobStateChangeException;
+import org.jobrunr.jobs.states.ProcessingState;
 import org.jobrunr.jobs.states.StateName;
 import org.jobrunr.scheduling.exceptions.JobNotFoundException;
 import org.jobrunr.server.runner.BackgroundJobRunner;
@@ -17,7 +18,9 @@ import org.slf4j.MDC;
 import java.lang.reflect.InvocationTargetException;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static org.jobrunr.jobs.states.StateName.*;
+import static org.jobrunr.jobs.states.StateName.DELETED;
+import static org.jobrunr.jobs.states.StateName.FAILED;
+import static org.jobrunr.jobs.states.StateName.PROCESSING;
 import static org.jobrunr.utils.exceptions.Exceptions.hasCause;
 
 public class BackgroundJobPerformer implements Runnable {
@@ -35,9 +38,11 @@ public class BackgroundJobPerformer implements Runnable {
         this.job = job;
     }
 
+    @Override
     public void run() {
         try {
-            backgroundJobServer.getJobZooKeeper().notifyThreadOccupied();
+            backgroundJobServer.getJobSteward().notifyThreadOccupied();
+            MDCMapper.loadMDCContextFromJob(job);
             performJob();
         } catch (Exception e) {
             if (isJobDeletedWhileProcessing(e)) {
@@ -52,7 +57,8 @@ public class BackgroundJobPerformer implements Runnable {
                 updateJobStateToFailedAndRunJobFilters("An exception occurred during the performance of the job", e);
             }
         } finally {
-            backgroundJobServer.getJobZooKeeper().notifyThreadIdle();
+            backgroundJobServer.getJobSteward().notifyThreadIdle();
+            MDC.clear();
         }
     }
 
@@ -66,31 +72,34 @@ public class BackgroundJobPerformer implements Runnable {
 
     private boolean updateJobStateToProcessingRunJobFiltersAndReturnIfProcessingCanStart() {
         try {
+            if (hasProcessingStateProvidedByStorageProvider()) return true;
+
             job.startProcessingOn(backgroundJobServer);
             saveAndRunStateRelatedJobFilters(job);
             LOGGER.debug("Job(id={}, jobName='{}') processing started", job.getId(), job.getJobName());
             return job.hasState(PROCESSING);
         } catch (ConcurrentJobModificationException e) {
             // processing already started on other server
-            LOGGER.trace("Could not start processing job {} - it is already in a newer state (collision {})", job.getId(), concurrentModificationExceptionCounter.incrementAndGet());
+            LOGGER.trace("Could not start processing job {} - it is already in a newer state (collision {})", job.getId(), concurrentModificationExceptionCounter.incrementAndGet(), e);
             return false;
         }
     }
 
     private void runActualJob() throws Exception {
         try {
-            MDCMapper.loadMDCContextFromJob(job);
             JobRunrDashboardLogger.setJob(job);
-            backgroundJobServer.getJobZooKeeper().startProcessing(job, Thread.currentThread());
+            backgroundJobServer.getJobSteward().startProcessing(job, Thread.currentThread());
             LOGGER.trace("Job(id={}, jobName='{}') is running", job.getId(), job.getJobName());
             jobPerformingFilters.runOnJobProcessingFilters();
             BackgroundJobRunner backgroundJobRunner = backgroundJobServer.getBackgroundJobRunner(job);
             backgroundJobRunner.run(job);
-            jobPerformingFilters.runOnJobProcessedFilters();
+            jobPerformingFilters.runOnJobProcessingSucceededFilters();
+        } catch (Exception e) {
+            jobPerformingFilters.runOnJobProcessingFailedFilters(e);
+            throw e;
         } finally {
-            backgroundJobServer.getJobZooKeeper().stopProcessing(job);
+            backgroundJobServer.getJobSteward().stopProcessing(job);
             JobRunrDashboardLogger.clearJob();
-            MDC.clear();
         }
     }
 
@@ -101,7 +110,7 @@ public class BackgroundJobPerformer implements Runnable {
             saveAndRunStateRelatedJobFilters(job);
         } catch (IllegalJobStateChangeException ex) {
             if (ex.getFrom() == DELETED) {
-                LOGGER.info("Job finished successfully but it was already deleted - ignoring illegal state change from {} to {}", ex.getFrom(), ex.getTo());
+                LOGGER.info("Job finished successfully but it was already deleted - ignoring illegal state change from {} to {}", ex.getFrom(), ex.getTo(), ex);
             } else {
                 throw ex;
             }
@@ -122,7 +131,7 @@ public class BackgroundJobPerformer implements Runnable {
             }
         } catch (IllegalJobStateChangeException ex) {
             if (ex.getFrom() == DELETED) {
-                LOGGER.info("Job processing failed but it was already deleted - ignoring illegal state change from {} to {}", ex.getFrom(), ex.getTo());
+                LOGGER.info("Job processing failed but it was already deleted - ignoring illegal state change from {} to {}", ex.getFrom(), ex.getTo(), ex);
             } else {
                 throw ex;
             }
@@ -132,14 +141,16 @@ public class BackgroundJobPerformer implements Runnable {
     }
 
     protected void saveAndRunStateRelatedJobFilters(Job job) {
-        jobPerformingFilters.runOnStateAppliedFilters();
-        StateName beforeStateElection = job.getState();
         jobPerformingFilters.runOnStateElectionFilter();
-        StateName afterStateElection = job.getState();
         this.backgroundJobServer.getStorageProvider().save(job);
-        if (beforeStateElection != afterStateElection) {
-            jobPerformingFilters.runOnStateAppliedFilters();
+        jobPerformingFilters.runOnStateAppliedFilters();
+        if (job.getState() == FAILED) {
+            jobPerformingFilters.runOnJobFailedAfterRetriesFilters();
         }
+    }
+
+    private boolean hasProcessingStateProvidedByStorageProvider() {
+        return job.hasState(PROCESSING) && backgroundJobServer.getConfiguration().getId().equals(job.<ProcessingState>getJobState().getServerId());
     }
 
     private boolean isJobDeletedWhileProcessing(Exception e) {
@@ -147,7 +158,7 @@ public class BackgroundJobPerformer implements Runnable {
     }
 
     private boolean isJobServerStopped(Exception e) {
-        return hasCause(e, InterruptedException.class) && !job.hasState(StateName.DELETED);
+        return hasCause(e, JobActivatorShutdownException.class) || (hasCause(e, InterruptedException.class) && !job.hasState(StateName.DELETED));
     }
 
     private boolean isJobNotFoundException(Exception e) {

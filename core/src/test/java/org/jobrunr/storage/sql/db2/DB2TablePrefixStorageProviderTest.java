@@ -1,6 +1,5 @@
 package org.jobrunr.storage.sql.db2;
 
-import com.ibm.db2.jcc.DB2SimpleDataSource;
 import org.assertj.core.api.Condition;
 import org.jobrunr.jobs.mappers.JobMapper;
 import org.jobrunr.storage.StorageProvider;
@@ -21,22 +20,6 @@ import static org.jobrunr.utils.resilience.RateLimiter.Builder.rateLimit;
 
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class DB2TablePrefixStorageProviderTest extends AbstractDB2StorageProviderTest {
-
-    private static DB2SimpleDataSource dataSource;
-
-    @Override
-    protected DataSource getDataSource() {
-        if (dataSource == null) {
-            dataSource = new DB2SimpleDataSource();
-            dataSource.setServerName(sqlContainer.getHost());
-            dataSource.setUser(sqlContainer.getUsername());
-            dataSource.setPassword(sqlContainer.getPassword());
-            dataSource.setDatabaseName(sqlContainer.getDatabaseName());
-            dataSource.setPortNumber(sqlContainer.getFirstMappedPort());
-            dataSource.setDriverType(4);
-        }
-        return dataSource;
-    }
 
     @BeforeAll
     void runInitScript() {
@@ -60,8 +43,9 @@ class DB2TablePrefixStorageProviderTest extends AbstractDB2StorageProviderTest {
 
     @AfterEach
     void checkTablesCreatedWithCorrectPrefix() {
-        assertThat(dataSource)
+        assertThat(getDataSource())
                 .hasTable("SOME_SCHEMA", "SOME_PREFIX_JOBRUNR_MIGRATIONS")
+                .hasTable("SOME_SCHEMA", "SOME_PREFIX_JOBRUNR_JOBS")
                 .hasTable("SOME_SCHEMA", "SOME_PREFIX_JOBRUNR_RECURRING_JOBS")
                 .hasTable("SOME_SCHEMA", "SOME_PREFIX_JOBRUNR_BACKGROUNDJOBSERVERS")
                 .hasTable("SOME_SCHEMA", "SOME_PREFIX_JOBRUNR_METADATA")

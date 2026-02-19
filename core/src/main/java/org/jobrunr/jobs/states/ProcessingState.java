@@ -1,5 +1,8 @@
 package org.jobrunr.jobs.states;
 
+import org.jobrunr.server.BackgroundJobServer;
+import org.jobrunr.server.BackgroundJobServerConfigurationReader;
+
 import java.time.Instant;
 import java.util.UUID;
 
@@ -7,20 +10,42 @@ import java.util.UUID;
 public class ProcessingState extends AbstractJobState {
 
     private UUID serverId;
+    private String serverName;
     private Instant updatedAt;
 
     protected ProcessingState() { // for json deserialization
-        this(null);
+        this(null, null);
     }
 
-    public ProcessingState(UUID serverId) {
-        super(StateName.PROCESSING);
+    public ProcessingState(BackgroundJobServer backgroundJobServer) {
+        this(backgroundJobServer.getConfiguration());
+    }
+
+    public ProcessingState(BackgroundJobServerConfigurationReader backgroundJobServerConfiguration) {
+        this(backgroundJobServerConfiguration.getId(), backgroundJobServerConfiguration.getName());
+    }
+
+    public ProcessingState(UUID serverId, String serverName) {
+        this(serverId, serverName, Instant.now());
+    }
+
+    protected ProcessingState(UUID serverId, String serverName, Instant createdAt) {
+        this(serverId, serverName, createdAt, createdAt);
+    }
+
+    public ProcessingState(UUID serverId, String serverName, Instant createdAt, Instant updatedAt) {
+        super(StateName.PROCESSING, createdAt);
         this.serverId = serverId;
-        this.updatedAt = getCreatedAt();
+        this.serverName = serverName;
+        this.updatedAt = updatedAt;
     }
 
     public UUID getServerId() {
         return serverId;
+    }
+
+    public String getServerName() {
+        return serverName;
     }
 
     public void setUpdatedAt(Instant updatedAt) {

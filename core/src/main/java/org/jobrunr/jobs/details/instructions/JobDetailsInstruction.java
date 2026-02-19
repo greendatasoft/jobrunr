@@ -7,16 +7,23 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Proxy;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
-import java.util.LinkedList;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Optional;
 import java.util.stream.Stream;
 
 import static java.util.stream.Collectors.joining;
 import static org.jobrunr.JobRunrException.shouldNotHappenException;
-import static org.jobrunr.jobs.details.JobDetailsGeneratorUtils.*;
-import static org.jobrunr.utils.reflection.ReflectionUtils.*;
+import static org.jobrunr.jobs.details.JobDetailsGeneratorUtils.createObjectViaMethod;
+import static org.jobrunr.jobs.details.JobDetailsGeneratorUtils.findParamTypesFromDescriptor;
+import static org.jobrunr.jobs.details.JobDetailsGeneratorUtils.findParamTypesFromDescriptorAsArray;
+import static org.jobrunr.jobs.details.JobDetailsGeneratorUtils.toFQClassName;
+import static org.jobrunr.utils.reflection.ReflectionUtils.getValueFromField;
+import static org.jobrunr.utils.reflection.ReflectionUtils.isClassAssignableToObject;
+import static org.jobrunr.utils.reflection.ReflectionUtils.toClass;
 
 public class JobDetailsInstruction extends VisitMethodInstruction {
 
@@ -28,9 +35,9 @@ public class JobDetailsInstruction extends VisitMethodInstruction {
 
     @Override
     public Object invokeInstruction() {
-        if (!isLastInstruction() && isVoidInstruction()) {
+        if (!isLastJobDetailsInstruction() && isVoidInstruction()) {
             throw new JobRunrException("JobRunr only supports enqueueing/scheduling of one method");
-        } else if (isLastInstruction()) {
+        } else if (isLastJobDetailsInstruction()) {
             jobDetailsBuilder.setClassName(getClassName());
             jobDetailsBuilder.setMethodName(getMethodName());
             jobDetailsBuilder.setJobParameters(getJobParameters());
@@ -54,14 +61,15 @@ public class JobDetailsInstruction extends VisitMethodInstruction {
             return findInheritedClassName(className).orElse(className);
         }
 
-        Object jobOnStack = jobDetailsBuilder.getStack().getLast();
-        if (jobOnStack == null) {
-            return className;
-        }
-
-        Class<Object> jobClass = toClass(className);
-        if (jobClass.isAssignableFrom(jobOnStack.getClass())) {
-            return jobOnStack.getClass().getName();
+        Iterator<Object> objectOnStackDescIterator = jobDetailsBuilder.getStack().descendingIterator();
+        while (objectOnStackDescIterator.hasNext()) {
+            Object jobOnStack = objectOnStackDescIterator.next();
+            if (jobOnStack != null && !jobOnStack.getClass().isSynthetic() && !Proxy.isProxyClass(jobOnStack.getClass())) {
+                Class<Object> jobClass = toClass(className);
+                if (jobClass.isAssignableFrom(jobOnStack.getClass())) {
+                    return jobOnStack.getClass().getName();
+                }
+            }
         }
         return className;
     }
@@ -71,14 +79,14 @@ public class JobDetailsInstruction extends VisitMethodInstruction {
         return name;
     }
 
-    private Object getObject() {
+    protected Object getObject() {
         Class<?>[] paramTypes = findParamTypesFromDescriptorAsArray(descriptor);
         final Object ownerObject = jobDetailsBuilder.getStack().remove(jobDetailsBuilder.getStack().size() - 1 - paramTypes.length);
         return createObjectViaMethod(ownerObject, name, paramTypes, getParametersUsingParamTypes(paramTypes).toArray());
     }
 
     private Optional<String> findInheritedClassName(String className) {
-        if (jobDetailsBuilder.getLocalVariable(0) != null) {
+        if (jobDetailsBuilder.getLocalVariable(0) != null && jobDetailsBuilder.getLocalVariable(0).getClass().getDeclaredFields().length > 0) {
             final Field declaredField = jobDetailsBuilder.getLocalVariable(0).getClass().getDeclaredFields()[0];
             final Object valueFromField = getValueFromField(declaredField, jobDetailsBuilder.getLocalVariable(0));
             if (toClass(className).isAssignableFrom(valueFromField.getClass())) {
@@ -88,9 +96,9 @@ public class JobDetailsInstruction extends VisitMethodInstruction {
         return Optional.empty();
     }
 
-    private List<JobParameter> getJobParameters() {
+    protected List<JobParameter> getJobParameters() {
         final List<Class<?>> paramTypesFromDescriptor = findParamTypesFromDescriptor(descriptor);
-        final LinkedList<Class<?>> paramTypes = new LinkedList<>(paramTypesFromDescriptor);
+        final ArrayDeque<Class<?>> paramTypes = new ArrayDeque<>(paramTypesFromDescriptor);
 
         List<JobParameter> result = new ArrayList<>();
         while (!paramTypes.isEmpty()) {
@@ -101,7 +109,7 @@ public class JobDetailsInstruction extends VisitMethodInstruction {
 
     private JobParameter toJobParameter(Class<?> paramType, Object param) {
         if (param == null) {
-            throw new NullPointerException("You are passing null as a parameter to your background job for type " + paramType.getName() + " - JobRunr prevents this to fail fast.");
+            return new JobParameter(paramType, null);
         }
 
         if (isClassAssignableToObject(paramType, param)) {

@@ -17,6 +17,7 @@ public class AllJVMInstructions {
     private static final Map<Integer, String> unsupportedInstructions = new HashMap<>();
 
     static {
+        instructions.put(Opcodes.ACONST_NULL, NullLoadOperandInstruction::new);
         instructions.put(Opcodes.AASTORE, AAStoreInstruction::new);
         instructions.put(Opcodes.ALOAD, ALoadOperandInstruction::new);
         instructions.put(Opcodes.ANEWARRAY, ANewArrayOperandInstruction::new);
@@ -26,6 +27,10 @@ public class AllJVMInstructions {
         instructions.put(Opcodes.DLOAD, DLoadOperandInstruction::new);
         instructions.put(Opcodes.FLOAD, FLoadOperandInstruction::new);
         instructions.put(Opcodes.I2B, I2BOperandInstruction::new);
+        instructions.put(Opcodes.I2C, I2COperandInstruction::new);
+        instructions.put(Opcodes.I2D, I2DOperandInstruction::new);
+        instructions.put(Opcodes.I2F, I2FOperandInstruction::new);
+        instructions.put(Opcodes.I2L, I2LOperandInstruction::new);
         instructions.put(Opcodes.I2S, I2SOperandInstruction::new);
         instructions.put(Opcodes.ICONST_0, IConst0OperandInstruction::new);
         instructions.put(Opcodes.ICONST_1, IConst1OperandInstruction::new);
@@ -55,6 +60,8 @@ public class AllJVMInstructions {
         instructions.put(Opcodes.GETSTATIC, GetStaticInstruction::new);
         instructions.put(Opcodes.RETURN, ReturnOperandInstruction::new);
         instructions.put(Opcodes.SIPUSH, SingleIntOperandInstruction::new);
+        // needed to support Jacoco
+        instructions.put(Opcodes.BASTORE, BAStoreOperandInstruction::new);
 
         String mathematicalPerformanceSuffix = " - for performance reasons it is better to do the calculation outside of the job lambda";
         asList(Opcodes.IADD, Opcodes.LADD, Opcodes.FADD, Opcodes.DADD)

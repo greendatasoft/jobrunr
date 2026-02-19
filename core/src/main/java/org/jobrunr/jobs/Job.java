@@ -2,38 +2,84 @@ package org.jobrunr.jobs;
 
 import org.jobrunr.jobs.context.JobDashboardLogger;
 import org.jobrunr.jobs.context.JobDashboardProgressBar;
-import org.jobrunr.jobs.states.*;
+import org.jobrunr.jobs.states.DeletedState;
+import org.jobrunr.jobs.states.EnqueuedState;
+import org.jobrunr.jobs.states.FailedState;
+import org.jobrunr.jobs.states.IllegalJobStateChangeException;
+import org.jobrunr.jobs.states.JobState;
+import org.jobrunr.jobs.states.ProcessingState;
+import org.jobrunr.jobs.states.SchedulableState;
+import org.jobrunr.jobs.states.ScheduledState;
+import org.jobrunr.jobs.states.StateName;
+import org.jobrunr.jobs.states.SucceededState;
 import org.jobrunr.server.BackgroundJobServer;
 import org.jobrunr.storage.ConcurrentJobModificationException;
+import org.jobrunr.utils.annotations.LockingJob;
+import org.jobrunr.utils.jobs.JobSortColumns;
+import org.jobrunr.utils.resilience.Lock;
 import org.jobrunr.utils.streams.StreamUtils;
+import org.jobrunr.utils.uuid.UUIDv7Factory;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
+import static java.util.Collections.emptyList;
 import static java.util.Collections.singletonList;
 import static java.util.Collections.unmodifiableList;
 import static org.jobrunr.jobs.states.AllowedJobStateStateChanges.isIllegalStateChange;
+import static org.jobrunr.storage.StorageProviderUtils.Jobs.FIELD_CREATED_AT;
+import static org.jobrunr.storage.StorageProviderUtils.Jobs.FIELD_SCHEDULED_AT;
+import static org.jobrunr.storage.StorageProviderUtils.Jobs.FIELD_UPDATED_AT;
 import static org.jobrunr.utils.reflection.ReflectionUtils.cast;
 
 /**
- * Defines the job with its JobDetails, History and Job Metadata
+ * Defines the job with its JobDetails, History and Job Metadata.
+ * <p>
+ * <em>Note:</em> Jobs are managed by JobRunr and may under no circumstances be updated during Job Processing. They may be deleted, though.
+ * <p>
+ * During Job Processing, JobRunr updates the job every x amount of seconds (where x is the pollIntervalInSeconds and defaults to 15s) to distinguish
+ * running jobs from orphaned jobs (orphaned jobs are jobs that have the state in PROGRESS but are not running anymore due to JVM or container crash).
  */
 public class Job extends AbstractJob {
 
+    private static final Pattern METADATA_PATTERN = Pattern.compile("(\\b" + JobDashboardLogger.JOBRUNR_LOG_KEY + "\\b|\\b" + JobDashboardProgressBar.JOBRUNR_PROGRESSBAR_KEY + "\\b)-(\\d+)");
+    public static JobSortColumns ALLOWED_SORT_COLUMNS = new JobSortColumns();
+
+    static {
+        ALLOWED_SORT_COLUMNS.add(FIELD_CREATED_AT, Job::getCreatedAt);
+        ALLOWED_SORT_COLUMNS.add(FIELD_UPDATED_AT, Job::getUpdatedAt);
+        ALLOWED_SORT_COLUMNS.add(FIELD_SCHEDULED_AT, job -> job.getJobState() instanceof SchedulableState ? ((SchedulableState) job.getJobState()).getScheduledAt() : null);
+    }
+
+    private static final UUIDv7Factory UUID_FACTORY = UUIDv7Factory.builder().withIncrementPlus1().build();
+
     private final UUID id;
-    private final ArrayList<JobState> jobHistory;
+    private final CopyOnWriteArrayList<JobState> jobHistory;
     private final ConcurrentMap<String, Object> metadata;
     private String recurringJobId;
+    private transient final AtomicInteger stateIndexBeforeStateChange;
+
+    public static UUID newUUID() {
+        return UUID_FACTORY.create();
+    }
 
     private Job() {
         // used for deserialization
         this.id = null;
-        this.jobHistory = new ArrayList<>();
+        this.jobHistory = new CopyOnWriteArrayList<>();
         this.metadata = new ConcurrentHashMap<>();
+        this.stateIndexBeforeStateChange = new AtomicInteger(-1);
     }
 
     public Job(JobDetails jobDetails) {
@@ -55,8 +101,9 @@ public class Job extends AbstractJob {
     public Job(UUID id, int version, JobDetails jobDetails, List<JobState> jobHistory, ConcurrentMap<String, Object> metadata) {
         super(jobDetails, version);
         if (jobHistory.isEmpty()) throw new IllegalStateException("A job should have at least one initial state");
-        this.id = id != null ? id : UUID.randomUUID();
-        this.jobHistory = new ArrayList<>(jobHistory);
+        this.id = id != null ? id : newUUID();
+        this.jobHistory = new CopyOnWriteArrayList<>(jobHistory);
+        this.stateIndexBeforeStateChange = new AtomicInteger(version == 0 ? 0 : -1);
         this.metadata = metadata;
     }
 
@@ -106,6 +153,23 @@ public class Job extends AbstractJob {
         return getState().equals(state);
     }
 
+    public boolean hasStateChange() {
+        int actualStateChanges = stateIndexBeforeStateChange.get();
+        return actualStateChanges > -1 && jobHistory.size() > actualStateChanges;
+    }
+
+    /**
+     * This method is only to be called by JobRunr itself. It may not be called externally as it will break the {@link org.jobrunr.jobs.filters.JobFilter JobFilters}
+     *
+     * @return all the stateChanges since they were last retrieved.
+     */
+    public synchronized List<JobState> getStateChangesForJobFilters() {
+        int actualStateChanges = stateIndexBeforeStateChange.getAndSet(-1);
+        if (actualStateChanges < 0) return emptyList();
+        List<JobState> history = new ArrayList<>(jobHistory);
+        return history.subList(actualStateChanges, history.size());
+    }
+
     public void enqueue() {
         addJobState(new EnqueuedState());
     }
@@ -116,15 +180,16 @@ public class Job extends AbstractJob {
 
     public void startProcessingOn(BackgroundJobServer backgroundJobServer) {
         if (getState() == StateName.PROCESSING) throw new ConcurrentJobModificationException(this);
-        addJobState(new ProcessingState(backgroundJobServer.getId()));
+        addJobState(new ProcessingState(backgroundJobServer));
     }
 
-    public void updateProcessing() {
+    public Job updateProcessing() {
         ProcessingState jobState = getJobState();
         jobState.setUpdatedAt(Instant.now());
+        return this;
     }
 
-    public void succeeded() {
+    public Job succeeded() {
         Optional<EnqueuedState> lastEnqueuedState = getLastJobStateOfType(EnqueuedState.class);
         if (!lastEnqueuedState.isPresent()) {
             throw new IllegalStateException("Job cannot succeed if it was not enqueued before.");
@@ -134,15 +199,18 @@ public class Job extends AbstractJob {
         Duration latencyDuration = Duration.between(lastEnqueuedState.get().getEnqueuedAt(), getJobState().getCreatedAt());
         Duration processDuration = Duration.between(getJobState().getCreatedAt(), Instant.now());
         addJobState(new SucceededState(latencyDuration, processDuration));
+        return this;
     }
 
-    public void failed(String message, Exception exception) {
+    public Job failed(String message, Exception exception) {
         addJobState(new FailedState(message, exception));
+        return this;
     }
 
-    public void delete(String reason) {
+    public Job delete(String reason) {
         clearMetadata();
         addJobState(new DeletedState(reason));
+        return this;
     }
 
     public Instant getCreatedAt() {
@@ -170,14 +238,18 @@ public class Job extends AbstractJob {
                 '}';
     }
 
+    @LockingJob("locks the job so the state of a job cannot be changed while it is being saved to the database")
     private void addJobState(JobState jobState) {
         if (isIllegalStateChange(getState(), jobState.getName())) {
             throw new IllegalJobStateChangeException(getState(), jobState.getName());
         }
-        this.jobHistory.add(jobState);
+        try (Lock ignored = lock()) {
+            this.stateIndexBeforeStateChange.compareAndSet(-1, this.jobHistory.size());
+            this.jobHistory.add(jobState);
+        }
     }
 
     private void clearMetadata() {
-        metadata.entrySet().removeIf(entry -> !(entry.getKey().matches("(\\b" + JobDashboardLogger.JOBRUNR_LOG_KEY + "\\b|\\b" + JobDashboardProgressBar.JOBRUNR_PROGRESSBAR_KEY + "\\b)-(\\d)")));
+        metadata.entrySet().removeIf(entry -> !METADATA_PATTERN.matcher(entry.getKey()).matches());
     }
 }
