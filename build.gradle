@@ -7,17 +7,6 @@ plugins {
     id 'org.sonarqube' version '6.3.1.5724'
 }
 
-nexusPublishing {
-    packageGroup = "org.jobrunr"
-    repositories {
-        // see https://central.sonatype.org/publish/publish-portal-ossrh-staging-api/#configuration
-        sonatype {
-            nexusUrl.set(uri("https://ossrh-staging-api.central.sonatype.com/service/local/"))
-            snapshotRepositoryUrl.set(uri("https://central.sonatype.com/repository/maven-snapshots/"))
-        }
-    }
-}
-
 task nexusPushFromStagingToCentral {
     doLast {
         if (System.getenv("SONATYPE_AUTH_HEADER") == null) {

@@ -128,6 +128,17 @@ publishing {
             }
         }
     }
+    repositories {
+        maven {
+            var releasesUrl = "$GREENDATA_PUBLIC_REPO_URL"
+            var snapshotsUrl = "$GREENDATA_INTERNAL_REPO_URL"
+            url = (version.toString().endsWith("SNAPSHOT")) ? snapshotsUrl : releasesUrl
+            credentials {
+                username "$MAVEN_REPO_USER"
+                password "$MAVEN_REPO_PASS"
+            }
+        }
+    }
 }
 
 signing {
