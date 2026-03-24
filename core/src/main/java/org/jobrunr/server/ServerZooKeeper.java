@@ -41,6 +41,7 @@ public class ServerZooKeeper implements Runnable {
     @Override
     public void run() {
         if (backgroundJobServer.isStopped()) return;
+        if (!backgroundJobServer.getCircuitBreaker().canProceed()) return;
 
         try {
             if (backgroundJobServer.isUnAnnounced()) {
@@ -50,11 +51,12 @@ public class ServerZooKeeper implements Runnable {
             }
         } catch (Exception shouldNotHappen) {
             LOGGER.error("An unrecoverable error occurred. ", shouldNotHappen);
-            new Thread(this::resetServer).start();
+            backgroundJobServer.getCircuitBreaker().recordFailure();
         }
     }
 
     public synchronized void stop() {
+        restartAttempts.set(0);
         try {
             storageProvider.signalBackgroundJobServerStopped(backgroundJobServer.getServerStatus());
         } catch (Exception e) {
@@ -78,7 +80,7 @@ public class ServerZooKeeper implements Runnable {
             determineIfCurrentBackgroundJobServerIsMaster();
         } catch (ServerTimedOutException e) {
             LOGGER.error("SEVERE ERROR - Server timed out while it's still alive. Are all servers using NTP and in the same timezone? Are you having long GC cycles? Restart attempt {}", restartAttempts.incrementAndGet());
-            new Thread(this::resetServer).start();
+            backgroundJobServer.getCircuitBreaker().recordFailure();
         }
     }
 
@@ -117,19 +119,6 @@ public class ServerZooKeeper implements Runnable {
                 LOGGER.info("Server {} is master (another BackgroundJobServer)", masterId);
             }
         }
-    }
-
-    private void resetServer() {
-        LOGGER.info("Resetting BackgroundJobServer");
-
-        backgroundJobServer.stop();
-        backgroundJobServer.start();
-
-        LOGGER.info("BackgroundJobServer has been reset");
-    }
-
-    private void stopServer() {
-        backgroundJobServer.stop();
     }
 
     private static Instant min(Instant instant1, Instant instant2) {

@@ -71,6 +71,7 @@ public class JobZooKeeper implements Runnable {
         try {
             runStartTime = now();
             if (backgroundJobServer.isUnAnnounced()) return;
+            if (!backgroundJobServer.getCircuitBreaker().canProceed()) return;
 
             updateJobsThatAreBeingProcessed();
             runMasterTasksIfCurrentServerIsMaster();

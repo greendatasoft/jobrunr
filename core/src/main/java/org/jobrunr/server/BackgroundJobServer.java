@@ -4,6 +4,9 @@ import org.jobrunr.jobs.Job;
 import org.jobrunr.jobs.filters.JobDefaultFilters;
 import org.jobrunr.jobs.filters.JobFilter;
 import org.jobrunr.server.dashboard.DashboardNotificationManager;
+import org.jobrunr.server.degradation.CircuitBreaker;
+import org.jobrunr.server.degradation.CircuitBreakerHandler;
+import org.jobrunr.server.degradation.State;
 import org.jobrunr.server.jmx.BackgroundJobServerMBean;
 import org.jobrunr.server.jmx.JobServerStats;
 import org.jobrunr.server.runner.*;
@@ -29,6 +32,7 @@ import java.util.UUID;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
 
 import static java.lang.Integer.compare;
@@ -56,6 +60,7 @@ public class BackgroundJobServer implements BackgroundJobServerMBean {
     protected final JobZooKeeper jobZooKeeper;
     protected final BackgroundJobServerLifecycleLock lifecycleLock;
     protected final BackgroundJobPerformerFactory backgroundJobPerformerFactory;
+    protected final CircuitBreaker circuitBreaker;
     protected volatile Instant firstHeartbeat;
     protected volatile boolean isRunning;
     private volatile Boolean isMaster;
@@ -67,10 +72,14 @@ public class BackgroundJobServer implements BackgroundJobServerMBean {
     }
 
     public BackgroundJobServer(StorageProvider storageProvider, JsonMapper jsonMapper, JobActivator jobActivator) {
-        this(storageProvider, jsonMapper, jobActivator, usingStandardBackgroundJobServerConfiguration());
+        this(storageProvider, jsonMapper, jobActivator, null, usingStandardBackgroundJobServerConfiguration());
     }
 
     public BackgroundJobServer(StorageProvider storageProvider, JsonMapper jsonMapper, JobActivator jobActivator, BackgroundJobServerConfiguration configuration) {
+        this(storageProvider, jsonMapper, jobActivator, null, configuration);
+    }
+
+    public BackgroundJobServer(StorageProvider storageProvider, JsonMapper jsonMapper, JobActivator jobActivator, CircuitBreaker circuitBreaker, BackgroundJobServerConfiguration configuration) {
         if (storageProvider == null)
             throw new IllegalArgumentException("A StorageProvider is required to use a BackgroundJobServer. Please see the documentation on how to setup a job StorageProvider.");
 
@@ -87,6 +96,7 @@ public class BackgroundJobServer implements BackgroundJobServerMBean {
         this.jobZooKeeper = createJobZooKeeper();
         this.backgroundJobPerformerFactory = loadBackgroundJobPerformerFactory();
         this.lifecycleLock = new BackgroundJobServerLifecycleLock();
+        this.circuitBreaker = circuitBreaker == null ? createCircuitBreaker() : circuitBreaker;
     }
 
     public UUID getId() {
@@ -208,6 +218,10 @@ public class BackgroundJobServer implements BackgroundJobServerMBean {
         return workDistributionStrategy;
     }
 
+    public CircuitBreaker getCircuitBreaker() {
+        return circuitBreaker;
+    }
+
     public void setJobFilters(List<JobFilter> jobFilters) {
         this.jobDefaultFilters.addAll(jobFilters);
     }
@@ -324,6 +338,10 @@ public class BackgroundJobServer implements BackgroundJobServerMBean {
         return configuration.backgroundJobServerWorkerPolicy.toWorkDistributionStrategy(this);
     }
 
+    private CircuitBreaker createCircuitBreaker() {
+        return CircuitBreaker.createDefault(new CircuitBreakerPauseHandler());
+    }
+
     private BackgroundJobPerformerFactory loadBackgroundJobPerformerFactory() {
         ServiceLoader<BackgroundJobPerformerFactory> serviceLoader = ServiceLoader.load(BackgroundJobPerformerFactory.class);
         return stream(spliteratorUnknownSize(serviceLoader.iterator(), Spliterator.ORDERED), false)
@@ -368,6 +386,39 @@ public class BackgroundJobServer implements BackgroundJobServerMBean {
         @Override
         public BackgroundJobPerformer newBackgroundJobPerformer(BackgroundJobServer backgroundJobServer, Job job) {
             return new BackgroundJobPerformer(backgroundJobServer, job);
+        }
+    }
+
+    protected class CircuitBreakerPauseHandler implements CircuitBreakerHandler {
+        private final AtomicBoolean paused = new AtomicBoolean(false);
+
+        @Override
+        public void onStateChange(State newState) {
+            if (newState == State.OPEN) {
+                LOGGER.warn("Circuit Breaker OPENED, Service pausing");
+                pause();
+            } else if (newState == State.CLOSED) {
+                LOGGER.warn("Circuit Breaker CLOSED, Service recovered");
+                resume();
+            }
+        }
+
+        private void pause() {
+            if (paused.compareAndSet(false, true)) {
+                serverZooKeeper.stop();
+                isMaster = null;
+                pauseProcessing();
+            }
+        }
+
+        private void resume() {
+            if (paused.compareAndSet(true, false)) {
+                resumeProcessing();
+            }
+        }
+
+        @Override
+        public void close() {
         }
     }
 }
