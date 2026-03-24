@@ -4,7 +4,7 @@ plugins {
     id 'signing'
 }
 
-version = System.getenv('DRONE_TAG') ?: "v1.0.0-SNAPSHOT"
+version = System.getenv('DRONE_TAG') ?: "v5.2.1-SNAPSHOT"
 
 dependencies {
     constraints {
