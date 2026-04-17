@@ -18,7 +18,7 @@ public class Exceptions {
     public static String getStackTraceAsString(Throwable exception) {
         StringWriter sw = new StringWriter();
         exception.printStackTrace(new PrintWriter(sw));
-        return sw.toString();
+        return sw.toString().replace("\r\n", "\n");
     }
 
     /**

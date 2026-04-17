@@ -20,6 +20,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.util.Comparator;
 import java.util.List;
@@ -346,7 +347,7 @@ class ProcessCarbonAwareAwaitingJobsTaskTest extends AbstractTaskTest {
     @Test
     void taskGetAvailableForecastEndTimeReturnsNextRefreshTimeWhenItsLaterThanForecastEndPeriod() {
         // GIVEN
-        ZonedDateTime zonedDateTime = ZonedDateTime.ofInstant(startOfDay(LocalDate.of(2024, 7, 12)), ZoneId.systemDefault());
+        ZonedDateTime zonedDateTime = ZonedDateTime.ofInstant(startOfDay(LocalDate.of(2024, 7, 12)), ZoneOffset.UTC);
         try (var ignored = mockTime(zonedDateTime)) {
             carbonAwareApiMock.mockResponseWhenRequestingAreaCode("BE", BELGIUM_2024_07_11);
             ProcessCarbonAwareAwaitingJobsTask task = createProcessCarbonAwareAwaitingJobsTask("BE");

@@ -153,6 +153,8 @@ public interface StorageProvider extends AutoCloseable {
      */
     List<Job> getJobList(StateName state, AmountRequest amountRequest);
 
+    List<Job> getJobsByRecurringId(StateName state, String recurringJobId, AmountRequest amountRequest);
+
     default Page<Job> getJobs(StateName state, PageRequest pageRequest) {
         long totalJobs = countJobs(state);
         if (totalJobs == 0) return pageRequest.emptyPage();

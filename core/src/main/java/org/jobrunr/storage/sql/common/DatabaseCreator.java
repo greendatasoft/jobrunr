@@ -20,6 +20,7 @@ import java.io.IOException;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.sql.Connection;
+import java.sql.DatabaseMetaData;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -33,10 +34,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.Callable;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.stream.Stream;
 
 import static java.lang.Thread.sleep;
@@ -144,7 +148,12 @@ public class DatabaseCreator {
         try (final Connection conn = getConnection()) {
             List<String> allTableNames = new ArrayList<>();
             String catalog = conn.getCatalog();
-            try (ResultSet tables = conn.getMetaData().getTables(catalog, null, "%", null)) {
+            DatabaseMetaData md = conn.getMetaData();
+
+            String pattern = "%jobrunr%";
+            if (md.storesUpperCaseIdentifiers()) pattern = pattern.toUpperCase();
+            else if (md.storesLowerCaseIdentifiers()) pattern = pattern.toLowerCase();
+            try (ResultSet tables = conn.getMetaData().getTables(catalog, null, pattern, null)) {
                 while (tables.next()) {
                     if (tablePrefixStatementUpdater.getSchema() != null) {
                         String tableSchema = tables.getString("TABLE_SCHEM");

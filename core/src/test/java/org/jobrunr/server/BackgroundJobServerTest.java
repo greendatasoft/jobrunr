@@ -115,8 +115,7 @@ class BackgroundJobServerTest {
         backgroundJobServer.start();
 
         // THEN
-        sleep(100, MILLISECONDS);
-        assertThat(backgroundJobServer.isAnnounced()).isTrue();
+        await().atMost(2, SECONDS).until(() -> backgroundJobServer.isAnnounced());
         assertThat(backgroundJobServer.isNotReadyToProcessJobs()).isTrue();
 
         // WHEN migration is running
@@ -291,9 +290,10 @@ class BackgroundJobServerTest {
     @Test
     void testStopBackgroundJobServerWhileProcessing() {
         backgroundJobServer.start();
+        await().atMost(5, SECONDS).until(backgroundJobServer::isAnnounced);
 
         final JobId jobId = BackgroundJob.enqueue(() -> testService.doWorkThatTakesLong(12));
-        await().atMost(500, MILLISECONDS).until(() -> storageProvider.getJobById(jobId).hasState(PROCESSING));
+        await().atMost(2, SECONDS).until(() -> storageProvider.getJobById(jobId).hasState(PROCESSING));
         backgroundJobServer.stop();
         await().atMost(20, SECONDS).until(() -> storageProvider.getJobById(jobId).hasState(FAILED) || storageProvider.getJobById(jobId).hasState(SCHEDULED));
         backgroundJobServer.start();

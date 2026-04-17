@@ -11,6 +11,7 @@ import tools.jackson.databind.deser.std.StdDeserializer;
 import tools.jackson.databind.exc.MismatchedInputException;
 import tools.jackson.databind.node.ArrayNode;
 
+import java.net.URI;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Collection;
@@ -33,7 +34,7 @@ public class JobParameterDeserializer extends StdDeserializer<JobParameter> {
         final String actualClassName = node.has(FIELD_ACTUAL_CLASS_NAME) ? node.get(FIELD_ACTUAL_CLASS_NAME).asString() : null;
         final JsonNode objectJsonNode = node.get("object");
         if (Path.class.getName().equals(className)) { // see https://github.com/FasterXML/jackson-databind/issues/2013
-            return new JobParameter(className, Paths.get(objectJsonNode.asString().replace("file:", "")));
+            return new JobParameter(className, Paths.get(URI.create(objectJsonNode.asString())));
         } else {
             return getJobParameter(deserializationContext, className, actualClassName, objectJsonNode);
         }

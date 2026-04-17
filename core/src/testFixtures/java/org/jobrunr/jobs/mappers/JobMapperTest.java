@@ -86,7 +86,7 @@ public abstract class JobMapperTest {
 
     @Test
     void testSerializeAndDeserializeJobWithPath() {
-        Job job = anEnqueuedJob().withJobDetails(() -> testService.doWorkWithPath(Paths.get("/tmp", "jobrunr", "log.txt"))).build();
+        Job job = anEnqueuedJob().withJobDetails(() -> testService.doWorkWithPath(Paths.get(System.getProperty("java.io.tmpdir"), "jobrunr", "log.txt"))).build();
 
         String jobAsString = jobMapper.serializeJob(job);
 
@@ -94,7 +94,7 @@ public abstract class JobMapperTest {
         final Job actualJob = jobMapper.deserializeJob(jobAsString);
         assertThat(actualJob)
                 .isNotNull()
-                .hasJobDetails(TestService.class, "doWorkWithPath", Paths.get("/tmp", "jobrunr", "log.txt"));
+                .hasJobDetails(TestService.class, "doWorkWithPath", Paths.get(System.getProperty("java.io.tmpdir"), "jobrunr", "log.txt"));
     }
 
     @Test
@@ -230,7 +230,7 @@ public abstract class JobMapperTest {
         }
 
         public TestMetadata(String input) {
-            this(input, now(), Paths.get("/tmp"), new File("/tmp"));
+            this(input, now(), Paths.get(System.getProperty("java.io.tmpdir")), new File(System.getProperty("java.io.tmpdir")));
         }
 
         public TestMetadata(String input, Instant instant, Path path, File file) {

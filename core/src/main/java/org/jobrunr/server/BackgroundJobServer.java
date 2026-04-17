@@ -5,6 +5,9 @@ import org.jobrunr.jobs.filters.JobDefaultFilters;
 import org.jobrunr.jobs.filters.JobFilter;
 import org.jobrunr.server.concurrent.ConcurrentJobModificationResolver;
 import org.jobrunr.server.dashboard.DashboardNotificationManager;
+import org.jobrunr.server.degradation.CircuitBreaker;
+import org.jobrunr.server.degradation.CircuitBreakerHandler;
+import org.jobrunr.server.degradation.State;
 import org.jobrunr.server.jmx.BackgroundJobServerMBean;
 import org.jobrunr.server.jmx.JobServerStats;
 import org.jobrunr.server.lifecycle.BackgroundJobServerLifecycle;
@@ -45,7 +48,6 @@ import java.util.Spliterator;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-
 import static java.lang.Integer.compare;
 import static java.lang.Math.min;
 import static java.time.Instant.now;
@@ -65,31 +67,32 @@ public class BackgroundJobServer implements BackgroundJobServerMBean {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(BackgroundJobServer.class);
 
-    private final BackgroundJobServerConfigurationReader configuration;
-    private final StorageProvider storageProvider;
-    private final DashboardNotificationManager dashboardNotificationManager;
-    private final JsonMapper jsonMapper;
-    private final List<BackgroundJobRunner> backgroundJobRunners;
-    private final JobDefaultFilters jobDefaultFilters;
-    private final JobServerStats jobServerStats;
-    private final WorkDistributionStrategy workDistributionStrategy;
-    private final JobSteward jobSteward;
-    private final ServerZooKeeper serverZooKeeper;
-    private final ConcurrentJobModificationResolver concurrentJobModificationResolver;
-    private final BackgroundJobServerLifecycle lifecycle;
-    private final BackgroundJobPerformerFactory backgroundJobPerformerFactory;
-    private volatile Instant firstHeartbeat;
-    private volatile Boolean isMaster;
-    private volatile VersionNumber dataVersion;
+    protected final BackgroundJobServerConfigurationReader configuration;
+    protected final StorageProvider storageProvider;
+    protected final DashboardNotificationManager dashboardNotificationManager;
+    protected final JsonMapper jsonMapper;
+    protected final List<BackgroundJobRunner> backgroundJobRunners;
+    protected final JobDefaultFilters jobDefaultFilters;
+    protected final JobServerStats jobServerStats;
+    protected final WorkDistributionStrategy workDistributionStrategy;
+    protected final JobSteward jobSteward;
+    protected final ServerZooKeeper serverZooKeeper;
+    protected final ConcurrentJobModificationResolver concurrentJobModificationResolver;
+    protected final BackgroundJobServerLifecycle lifecycle;
+    protected final BackgroundJobPerformerFactory backgroundJobPerformerFactory;
+    protected final CircuitBreaker circuitBreaker;
+    protected volatile Instant firstHeartbeat;
+    protected volatile Boolean isMaster;
+    protected volatile VersionNumber dataVersion;
     private volatile PlatformThreadPoolJobRunrExecutor zookeeperThreadPool;
     private JobRunrExecutor jobExecutor;
 
 
     public BackgroundJobServer(StorageProvider storageProvider, JsonMapper jsonMapper, JobActivator jobActivator, BackgroundJobServerConfiguration configuration) {
-        this(storageProvider, jsonMapper, jobActivator, new BackgroundJobServerConfigurationReader(configuration));
+        this(storageProvider, jsonMapper, jobActivator, null, new BackgroundJobServerConfigurationReader(configuration));
     }
 
-    protected BackgroundJobServer(StorageProvider storageProvider, JsonMapper jsonMapper, JobActivator jobActivator, BackgroundJobServerConfigurationReader configuration) {
+    protected BackgroundJobServer(StorageProvider storageProvider, JsonMapper jsonMapper, JobActivator jobActivator, CircuitBreaker circuitBreaker, BackgroundJobServerConfigurationReader configuration) {
         if (storageProvider == null) {
             throw new IllegalArgumentException("A StorageProvider is required to use a BackgroundJobServer. Please see the documentation on how to setup a job StorageProvider.");
         }
@@ -108,6 +111,7 @@ public class BackgroundJobServer implements BackgroundJobServerMBean {
         this.backgroundJobPerformerFactory = loadBackgroundJobPerformerFactory();
         this.storageProvider.validatePollInterval(this.configuration.getPollInterval());
         this.lifecycle = new BackgroundJobServerLifecycle();
+        this.circuitBreaker = circuitBreaker == null ? createCircuitBreaker() : circuitBreaker;
     }
 
     @Override
@@ -129,6 +133,7 @@ public class BackgroundJobServer implements BackgroundJobServerMBean {
         if (guard) {
             try (LifecycleChangeLock lifecycleChange = lifecycle.goTo(START)) {
                 if (isStarted()) return;
+                circuitBreaker.reset();
                 firstHeartbeat = now();
                 startStewardAndServerZooKeeper();
                 startWorkers();
@@ -161,6 +166,10 @@ public class BackgroundJobServer implements BackgroundJobServerMBean {
 
     @Override
     public void stop() {
+        stop(true);
+    }
+
+    public void stop(boolean resetCircuitBreaker) {
         if (isStopping()) return;
         try (LifecycleChangeLock lifecycleChange = lifecycle.goTo(STOP)) {
             if (isStopped()) return;
@@ -169,6 +178,7 @@ public class BackgroundJobServer implements BackgroundJobServerMBean {
             stopWorkers();
             stopZooKeepers();
             firstHeartbeat = null;
+            if (resetCircuitBreaker) circuitBreaker.reset();
             LOGGER.info("{} BackgroundJobServer and BackgroundJobPerformers stopped", this);
             lifecycleChange.succeeded();
         }
@@ -235,7 +245,7 @@ public class BackgroundJobServer implements BackgroundJobServerMBean {
     }
 
     public boolean isNotReadyToProcessJobs() {
-        return !(isAnnounced() && hasDataVersion(v("6.0.0")));
+        return !(isAnnounced() && hasDataVersion(v("6.0.0"))) || !getCircuitBreaker().canProceed();
     }
 
     @Override
@@ -271,6 +281,10 @@ public class BackgroundJobServer implements BackgroundJobServerMBean {
 
     public WorkDistributionStrategy getWorkDistributionStrategy() {
         return workDistributionStrategy;
+    }
+
+    public CircuitBreaker getCircuitBreaker() {
+        return circuitBreaker;
     }
 
     public void setJobFilters(List<JobFilter> jobFilters) {
@@ -386,6 +400,10 @@ public class BackgroundJobServer implements BackgroundJobServerMBean {
         return configuration.getBackgroundJobServerWorkerPolicy().toWorkDistributionStrategy(this);
     }
 
+    protected CircuitBreaker createCircuitBreaker() {
+        return CircuitBreaker.createDefault(new CircuitBreakerPauseHandler());
+    }
+
     private BackgroundJobPerformerFactory loadBackgroundJobPerformerFactory() {
         ServiceLoader<BackgroundJobPerformerFactory> serviceLoader = ServiceLoader.load(BackgroundJobPerformerFactory.class);
         return stream(spliteratorUnknownSize(serviceLoader.iterator(), Spliterator.ORDERED), false)
@@ -406,6 +424,31 @@ public class BackgroundJobServer implements BackgroundJobServerMBean {
         @Override
         public BackgroundJobPerformer newBackgroundJobPerformer(BackgroundJobServer backgroundJobServer, Job job) {
             return new BackgroundJobPerformer(backgroundJobServer, job);
+        }
+    }
+
+    protected class CircuitBreakerPauseHandler implements CircuitBreakerHandler {
+
+        @Override
+        public void onStateChange(State newState) {
+            if (newState == State.OPEN) {
+                LOGGER.warn("Circuit Breaker OPENED, Service pausing");
+                // stop() must not run on the zookeeper pool thread that triggered the failure:
+                // stopZooKeepers() awaits termination of that very pool and would deadlock.
+                // Pass resetCircuitBreaker=false so the scheduled recovery can still fire.
+                Thread t = new Thread(() -> BackgroundJobServer.this.stop(false), "jobrunr-circuit-breaker-stop");
+                t.setDaemon(true);
+                t.start();
+            } else if (newState == State.CLOSED) {
+                LOGGER.warn("Circuit Breaker CLOSED, Service recovered");
+                // Called from the circuit breaker's recovery executor, not from the zookeeper pool,
+                // so start() can run inline without risking a deadlock.
+                BackgroundJobServer.this.start();
+            }
+        }
+
+        @Override
+        public void close() {
         }
     }
 }

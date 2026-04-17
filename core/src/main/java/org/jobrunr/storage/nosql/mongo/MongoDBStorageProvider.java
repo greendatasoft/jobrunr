@@ -350,6 +350,11 @@ public class MongoDBStorageProvider extends AbstractStorageProvider implements N
     }
 
     @Override
+    public List<Job> getJobsByRecurringId(StateName state, String recurringJobId, AmountRequest amountRequest) {
+        return findJobs(and(eq(Jobs.FIELD_STATE, state.name()), eq(Jobs.FIELD_RECURRING_JOB_ID, recurringJobId)), amountRequest);
+    }
+
+    @Override
     public List<Job> getCarbonAwareJobList(Instant deadlineBefore, AmountRequest amountRequest) {
         return findJobs(and(eq(Jobs.FIELD_STATE, AWAITING), lt(Jobs.FIELD_SCHEDULED_AT, toMicroSeconds(deadlineBefore))), amountRequest);
     }

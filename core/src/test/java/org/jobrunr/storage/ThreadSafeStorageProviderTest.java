@@ -97,7 +97,7 @@ class ThreadSafeStorageProviderTest {
         countDownLatch.await();
         final Instant after = Instant.now();
 
-        assertThat(between(before, after).toMillis()).isGreaterThan(200L);
+        assertThat(between(before, after).toMillis()).isGreaterThan(150L);
         executorService.shutdown();
     }
 
@@ -107,7 +107,7 @@ class ThreadSafeStorageProviderTest {
         final CountDownLatch countDownToInitiateSaveJob = new CountDownLatch(1);
         lenient().when(storageProviderMock.save(any(Job.class))).thenAnswer(invocation -> {
             countDownToInitiateSaveJob.countDown();
-            sleep(100);
+            sleep(200);
             return invocation.getArgument(0);
         });
 

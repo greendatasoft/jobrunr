@@ -90,6 +90,7 @@ target
 
 # misc
 .DS_Store
+.env
 .env.development
 .env.development.local
 .env.test.local
@@ -103,3 +104,13 @@ yarn-error.log*
 dependency-check-bin
 dependency-check-reports
 /renovate.js
+/core/tmp/
+/framework-support/jobrunr-micronaut-feature/jobrunr-micronaut/tmp/
+/framework-support/jobrunr-micronaut-feature/jobrunr-micronaut-tests/tmp/
+/framework-support/jobrunr-quarkus-extension/quarkus-jobrunr/tmp/
+/framework-support/jobrunr-quarkus-extension/quarkus-jobrunr-deployment/tmp/
+/framework-support/jobrunr-quarkus-extension/quarkus-jobrunr-tests/tmp/
+/framework-support/jobrunr-spring-boot-3-starter/tmp/
+/framework-support/jobrunr-spring-boot-4-starter/tmp/
+/language-support/jobrunr-kotlin-support/tmp/
+/language-support/tests/jobrunr-kotlin-2-3-support/tmp/

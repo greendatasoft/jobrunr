@@ -11,6 +11,7 @@ import org.bson.codecs.configuration.CodecRegistries;
 import org.bson.codecs.configuration.CodecRegistry;
 import org.jobrunr.storage.nosql.mongo.MongoDBStorageProvider;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -23,6 +24,7 @@ import java.util.Arrays;
 
 import static org.assertj.core.api.Assertions.assertThatCode;
 
+@Tag("docker")
 @Testcontainers
 @ExtendWith(MockitoExtension.class)
 class AmazonDocumentDBCreatorTest {

@@ -19,6 +19,7 @@ import org.jobrunr.storage.StorageProviderTest;
 import org.jobrunr.storage.StorageProviderUtils;
 import org.jobrunr.utils.mapper.jackson.JacksonJsonMapper;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.Tag;
 import org.testcontainers.containers.GenericContainer;
 
 import java.util.ArrayList;
@@ -30,6 +31,7 @@ import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.internal.util.reflection.Whitebox.setInternalState;
 
+@Tag("docker")
 public abstract class AbstractMongoDBStorageProviderTest extends StorageProviderTest {
 
     private static MongoClient mongoClient;

@@ -107,6 +107,14 @@ tasks.register('test25', Test) {
     classpath = sourceSets.test25.runtimeClasspath
 }
 
+tasks.withType(Test).configureEach {
+    useJUnitPlatform {
+        if (!project.hasProperty('withDocker')) {
+            excludeTags 'docker'
+        }
+    }
+}
+
 tasks.named('check') {
     dependsOn 'test17', 'test25'
 }
@@ -197,12 +205,14 @@ normalization {
     }
 }
 
+def isWindows = System.getProperty('os.name').toLowerCase().contains('windows')
+
 tasks.register('npmInstall', Exec) {
     workingDir = file('src/main/resources/org/jobrunr/dashboard/frontend')
     inputs.file('src/main/resources/org/jobrunr/dashboard/frontend/package.json')
     inputs.file('src/main/resources/org/jobrunr/dashboard/frontend/package-lock.json')
     outputs.dir('src/main/resources/org/jobrunr/dashboard/frontend/node_modules')
-    commandLine 'sh', '-c', 'npm ci'
+    commandLine isWindows ? ['cmd', '/c', 'npm ci'] : ['sh', '-c', 'npm ci']
     outputs.cacheIf { true }
 }
 
@@ -216,7 +226,7 @@ tasks.register('npmRunBuild', Exec) {
             }
     ).withPathSensitivity(PathSensitivity.RELATIVE)
     outputs.dir('src/main/resources/org/jobrunr/dashboard/frontend/build')
-    commandLine 'sh', '-c', 'npm run build'
+    commandLine isWindows ? ['cmd', '/c', 'npm run build'] : ['sh', '-c', 'npm run build']
     outputs.cacheIf { true }
 }
 
@@ -230,7 +240,7 @@ tasks.register('npmRunTest', Exec) {
             }
     ).withPathSensitivity(PathSensitivity.RELATIVE)
     outputs.dir('/tmp/reports/core/frontend')
-    commandLine 'sh', '-c', 'npm run test'
+    commandLine isWindows ? ['cmd', '/c', 'npm run test'] : ['sh', '-c', 'npm run test']
     outputs.cacheIf { true }
 }
 
@@ -321,17 +331,6 @@ publishing {
                         it.parent().remove(it)
                     }
                 }
-            }
-        }
-    }
-    repositories {
-        maven {
-            var releasesUrl = "$GREENDATA_PUBLIC_REPO_URL"
-            var snapshotsUrl = "$GREENDATA_INTERNAL_REPO_URL"
-            url = (version.toString().endsWith("SNAPSHOT")) ? snapshotsUrl : releasesUrl
-            credentials {
-                username "$MAVEN_REPO_USER"
-                password "$MAVEN_REPO_PASS"
             }
         }
     }

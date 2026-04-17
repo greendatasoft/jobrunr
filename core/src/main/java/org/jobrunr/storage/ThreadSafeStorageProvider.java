@@ -149,6 +149,11 @@ public class ThreadSafeStorageProvider implements StorageProvider {
     }
 
     @Override
+    public List<Job> getJobsByRecurringId(StateName state, String recurringJobId, AmountRequest amountRequest) {
+        return storageProvider.getJobsByRecurringId(state, recurringJobId, amountRequest);
+    }
+
+    @Override
     public List<Job> getCarbonAwareJobList(Instant deadlineBefore, AmountRequest amountRequest) {
         return storageProvider.getCarbonAwareJobList(deadlineBefore, amountRequest);
     }

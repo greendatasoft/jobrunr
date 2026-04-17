@@ -15,10 +15,10 @@ class SqLiteStorageProviderTest extends SqlStorageProviderTest {
     @Override
     public DataSource getDataSource() {
         if (dataSource == null) {
-            deleteFile("/tmp/jobrunr-test.db");
+            deleteFile(System.getProperty("java.io.tmpdir") + "/jobrunr-test.db");
 
             dataSource = new SQLiteDataSource();
-            dataSource.setUrl("jdbc:sqlite:/tmp/jobrunr-test.db");
+            dataSource.setUrl("jdbc:sqlite:" + System.getProperty("java.io.tmpdir") + "/jobrunr-test.db");
         }
         return dataSource;
     }
