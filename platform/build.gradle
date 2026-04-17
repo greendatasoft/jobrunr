@@ -4,8 +4,6 @@ plugins {
     id 'signing'
 }
 
-version = "v8.5.0-SNAPSHOT"
-
 dependencies {
     constraints {
         api 'org.slf4j:slf4j-api:2.0.17'
