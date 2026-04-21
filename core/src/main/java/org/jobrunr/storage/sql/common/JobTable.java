@@ -75,6 +75,11 @@ public class JobTable extends Sql<Job> {
         return this;
     }
 
+    public JobTable withRecurringJobId(String recurringJobId) {
+        with(FIELD_RECURRING_JOB_ID, recurringJobId);
+        return this;
+    }
+
     public JobTable withScheduledAt(Instant scheduledBefore) {
         with(FIELD_SCHEDULED_AT, scheduledBefore);
         return this;
@@ -162,6 +167,13 @@ public class JobTable extends Sql<Job> {
         return withState(state)
                 .withScheduledAt(scheduledBefore)
                 .selectJobs("jobAsJson from jobrunr_jobs where state = :state and scheduledAt <= :scheduledAt", pageRequestMapper.map(amountRequest))
+                .collect(toList());
+    }
+
+    public List<Job> selectJobsByStateAndRecurringJobId(StateName state, String recurringJobId, AmountRequest amountRequest) {
+        return withState(state)
+                .withRecurringJobId(recurringJobId)
+                .selectJobs("jobAsJson from jobrunr_jobs where state = :state and recurringJobId = :recurringJobId", pageRequestMapper.map(amountRequest))
                 .collect(toList());
     }
 

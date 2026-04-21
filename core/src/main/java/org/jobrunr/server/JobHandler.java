@@ -37,7 +37,6 @@ public abstract class JobHandler implements Runnable {
             runInfo.markRunAsSucceeded();
         } catch (Exception e) {
             taskStatistics.handleException(e);
-            //TODO: Maybe add database fault tolerance
             LOGGER.warn(JobRunrException.SHOULD_NOT_HAPPEN_MESSAGE + " - Processing will continue. Exception count: " + taskStatistics.getExceptionCounter() + ". Error: ", e);
         }
     }

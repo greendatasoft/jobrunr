@@ -730,6 +730,49 @@ public abstract class StorageProviderTest {
     }
 
     @Test
+    void testGetJobsByRecurringId() {
+        // GIVEN
+        String recurringJobId = "my-recurring-job";
+        String otherRecurringJobId = "other-recurring-job";
+
+        List<Job> jobs = storageProvider.save(asList(
+                aJob().withName("1").withRecurringJobId(recurringJobId).withEnqueuedState(now().minusSeconds(30)).build(),
+                aJob().withName("2").withRecurringJobId(recurringJobId).withEnqueuedState(now().minusSeconds(20)).build(),
+                aJob().withName("3").withRecurringJobId(recurringJobId).withEnqueuedState(now().minusSeconds(10)).build(),
+                aJob().withName("4").withRecurringJobId(otherRecurringJobId).withEnqueuedState(now().minusSeconds(5)).build(),
+                anEnqueuedJob().withName("5").build()
+        ));
+
+        // WHEN & THEN — filters by recurringJobId
+        assertThatJobs(storageProvider.getJobsByRecurringId(ENQUEUED, recurringJobId, AmountBasedList.ascOnUpdatedAt(100)))
+                .hasSize(3)
+                .containsExactly(jobs.get(0), jobs.get(1), jobs.get(2));
+
+        // WHEN & THEN — descending order
+        assertThatJobs(storageProvider.getJobsByRecurringId(ENQUEUED, recurringJobId, AmountBasedList.descOnUpdatedAt(100)))
+                .hasSize(3)
+                .containsExactly(jobs.get(2), jobs.get(1), jobs.get(0));
+
+        // WHEN & THEN — other recurringJobId returns only its own jobs
+        assertThatJobs(storageProvider.getJobsByRecurringId(ENQUEUED, otherRecurringJobId, AmountBasedList.ascOnUpdatedAt(100)))
+                .hasSize(1)
+                .containsExactly(jobs.get(3));
+
+        // WHEN & THEN — wrong state returns nothing
+        assertThatJobs(storageProvider.getJobsByRecurringId(PROCESSING, recurringJobId, AmountBasedList.ascOnUpdatedAt(100)))
+                .isEmpty();
+
+        // WHEN & THEN — unknown recurringJobId returns nothing
+        assertThatJobs(storageProvider.getJobsByRecurringId(ENQUEUED, "unknown-id", AmountBasedList.ascOnUpdatedAt(100)))
+                .isEmpty();
+
+        // WHEN & THEN — limit is respected
+        assertThatJobs(storageProvider.getJobsByRecurringId(ENQUEUED, recurringJobId, AmountBasedList.ascOnUpdatedAt(2)))
+                .hasSize(2)
+                .containsExactly(jobs.get(0), jobs.get(1));
+    }
+
+    @Test
     void testDeleteJobs() {
         final List<Job> jobs = asList(
                 aJob().withEnqueuedState(now().minus(4, HOURS)).build(),
@@ -792,9 +835,10 @@ public abstract class StorageProviderTest {
 
     @Test
     void testScheduledJobsPage() {
-        Job job1 = anEnqueuedJob().withState(new ScheduledState(now())).build();
-        Job job2 = anEnqueuedJob().withState(new ScheduledState(now().plusSeconds(1))).build();
-        Job job3 = anEnqueuedJob().withState(new ScheduledState(now().plusSeconds(2))).build();
+        Instant createAt = now();
+        Job job1 = anEnqueuedJob(createAt).withState(new ScheduledState(createAt)).build();
+        Job job2 = anEnqueuedJob(createAt.plusMillis(100)).withState(new ScheduledState(createAt.plusSeconds(1), "", createAt.plusMillis(100))).build();
+        Job job3 = anEnqueuedJob(createAt.plusMillis(200)).withState(new ScheduledState(createAt.plusSeconds(2), "", createAt.plusMillis(200))).build();
         final List<Job> jobs = asList(job1, job2, job3);
 
         storageProvider.save(jobs);

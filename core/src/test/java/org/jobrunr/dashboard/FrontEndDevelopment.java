@@ -141,7 +141,7 @@ public class FrontEndDevelopment {
 
     private static StorageProvider h2StorageProvider() {
         HikariConfig config = new HikariConfig();
-        config.setJdbcUrl("jdbc:h2:/tmp/test-frontend");
+        config.setJdbcUrl("jdbc:h2:" + System.getProperty("java.io.tmpdir") + "/test-frontend");
         config.setUsername("sa");
         config.setPassword("sa");
         return toStorageProvider(new HikariDataSource(config));
@@ -183,7 +183,7 @@ public class FrontEndDevelopment {
 
     private static StorageProvider sqliteStorageProvider() throws SQLException {
         HikariConfig config = new HikariConfig();
-        config.setJdbcUrl("jdbc:sqlite:/tmp/jobrunr-frontend.db");
+        config.setJdbcUrl("jdbc:sqlite:" + System.getProperty("java.io.tmpdir") + "/jobrunr-frontend.db");
         return toStorageProvider(new HikariDataSource(config));
     }
 

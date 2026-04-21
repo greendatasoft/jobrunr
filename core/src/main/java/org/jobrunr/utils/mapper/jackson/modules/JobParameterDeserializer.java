@@ -13,6 +13,7 @@ import org.jobrunr.jobs.exceptions.JobParameterNotDeserializableException;
 import org.jobrunr.utils.mapper.JsonMapperUtils;
 
 import java.io.IOException;
+import java.net.URI;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Collection;
@@ -37,7 +38,7 @@ public class JobParameterDeserializer extends StdDeserializer<JobParameter> {
         final String actualClassName = node.has(FIELD_ACTUAL_CLASS_NAME) ? node.get(FIELD_ACTUAL_CLASS_NAME).asText() : null;
         final JsonNode objectJsonNode = node.get("object");
         if (Path.class.getName().equals(className)) { // see https://github.com/FasterXML/jackson-databind/issues/2013
-            return new JobParameter(className, Paths.get(objectJsonNode.asText().replace("file:", "")));
+            return new JobParameter(className, Paths.get(URI.create(objectJsonNode.asText())));
         } else {
             return getJobParameter(jsonParser, className, actualClassName, objectJsonNode);
         }

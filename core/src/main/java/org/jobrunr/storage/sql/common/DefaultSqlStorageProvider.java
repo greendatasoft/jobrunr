@@ -266,6 +266,15 @@ public class DefaultSqlStorageProvider extends AbstractStorageProvider implement
     }
 
     @Override
+    public List<Job> getJobsByRecurringId(StateName state, String recurringJobId, AmountRequest amountRequest) {
+        try (final Connection conn = dataSource.getConnection()) {
+            return jobTable(conn).selectJobsByStateAndRecurringJobId(state, recurringJobId, amountRequest);
+        } catch (SQLException e) {
+            throw new StorageException(e);
+        }
+    }
+
+    @Override
     public List<Job> getCarbonAwareJobList(Instant deadlineBefore, AmountRequest amountRequest) {
         try (final Connection conn = dataSource.getConnection()) {
             return jobTable(conn).selectJobsWithStateBefore(AWAITING, deadlineBefore, amountRequest);

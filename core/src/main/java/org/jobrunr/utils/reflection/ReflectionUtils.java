@@ -54,7 +54,8 @@ public class ReflectionUtils {
     }
 
     public static <T> Class<T> toClassFromPath(Path path) {
-        final String classFile = path.toString().substring(path.toString().indexOf(ROOT_PACKAGE_NAME));
+        final String normalizedPath = path.toString().replace('\\', '/');
+        final String classFile = normalizedPath.substring(normalizedPath.indexOf(ROOT_PACKAGE_NAME));
         String className = toClassNameFromFileName(classFile);
         return toClass(className);
     }

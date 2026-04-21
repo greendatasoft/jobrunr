@@ -21,7 +21,6 @@ import static java.time.ZoneOffset.UTC;
 import static java.time.temporal.ChronoUnit.HOURS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.jobrunr.utils.LocalDateUtils.nowUsingSystemDefault;
 import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 class CronExpressionTest {
@@ -50,13 +49,14 @@ class CronExpressionTest {
     @Test
     void cronExpressionsAreScheduledInUTC() {
         // always use next hour
-        int hour = now().getHour() + 1;
+        LocalDateTime nowInUtc = LocalDateTime.now(UTC);
+        int hour = nowInUtc.getHour() + 1;
         int daysToAdd = hour >= 24 ? 1 : 0;
         hour = hour == 24 ? 0 : hour;
 
         Instant actualNextInstant = new CronExpression(Cron.daily(hour)).next(createdAtNotRelevantInstant, Instant.now(), UTC);
 
-        Instant expectedNextInstant = OffsetDateTime.of(nowUsingSystemDefault().plusDays(daysToAdd), LocalTime.of(hour, 0), UTC).toInstant();
+        Instant expectedNextInstant = OffsetDateTime.of(nowInUtc.toLocalDate().plusDays(daysToAdd), LocalTime.of(hour, 0), UTC).toInstant();
 
         assertThat(actualNextInstant).isEqualTo(expectedNextInstant);
     }
@@ -64,7 +64,8 @@ class CronExpressionTest {
     @Test
     @Because("github issue 31")
     void dailyRecurringJobsTakeTimeZonesCorrectlyIntoAccount() {
-        LocalDateTime localDateTime = now();
+        ZoneOffset zone = ZoneOffset.of("+02:00");
+        LocalDateTime localDateTime = LocalDateTime.now(zone);
         int hour = localDateTime.getHour();
         int minute = localDateTime.getMinute();
         if (minute < 1) {
@@ -73,8 +74,8 @@ class CronExpressionTest {
             minute = minute - 1;
         }
 
-        Instant nextRun = new CronExpression(Cron.daily(hour, minute)).next(createdAtNotRelevantInstant, Instant.now(), ZoneOffset.of("+02:00"));
-        Instant expectedNextRun = now().plusDays(1).withHour(hour).withMinute(minute).withSecond(0).withNano(0).atZone(ZoneOffset.of("+02:00")).toInstant();
+        Instant nextRun = new CronExpression(Cron.daily(hour, minute)).next(createdAtNotRelevantInstant, Instant.now(), zone);
+        Instant expectedNextRun = localDateTime.plusDays(1).withHour(hour).withMinute(minute).withSecond(0).withNano(0).atZone(zone).toInstant();
         assertThat(nextRun)
                 .isAfter(Instant.now())
                 .isEqualTo(expectedNextRun);
@@ -83,10 +84,11 @@ class CronExpressionTest {
     @Test
     @Because("github issue 31")
     void minutelyRecurringJobsTakeTimeZonesCorrectlyIntoAccount() {
-        LocalDateTime localDateTime = now();
+        ZoneOffset zone = ZoneOffset.of("+02:00");
+        LocalDateTime localDateTime = LocalDateTime.now(zone);
         int nextMinute = localDateTime.plusMinutes(1).getMinute();
 
-        Instant nextRun = new CronExpression(Cron.hourly(nextMinute)).next(createdAtNotRelevantInstant, Instant.now(), ZoneOffset.of("+02:00"));
+        Instant nextRun = new CronExpression(Cron.hourly(nextMinute)).next(createdAtNotRelevantInstant, Instant.now(), zone);
         assertThat(nextRun).isAfter(Instant.now());
     }
 

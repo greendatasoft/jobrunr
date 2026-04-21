@@ -171,6 +171,18 @@ public class InMemoryStorageProvider extends AbstractStorageProvider {
     }
 
     @Override
+    public List<Job> getJobsByRecurringId(StateName state, String recurringJobId, AmountRequest amountRequest) {
+        return jobQueue.values().stream()
+                .filter(job -> recurringJobId.equals(job.getRecurringJobId().orElse(null)))
+                .filter(job -> job.hasState(state))
+                .sorted(getJobComparator(amountRequest))
+                .skip((amountRequest instanceof OffsetBasedPageRequest) ? ((OffsetBasedPageRequest) amountRequest).getOffset() : 0)
+                .limit(amountRequest.getLimit())
+                .map(this::deepClone)
+                .collect(toList());
+    }
+
+    @Override
     public List<Job> getCarbonAwareJobList(Instant deadlineBefore, AmountRequest amountRequest) {
         return getJobsStream(AWAITING, amountRequest)
                 .filter(job -> job.getJobState() instanceof CarbonAwareAwaitingState && ((CarbonAwareAwaitingState) job.getJobState()).getTo().isBefore(deadlineBefore))

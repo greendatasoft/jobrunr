@@ -15,6 +15,8 @@ import org.jobrunr.stubs.TestService.Task;
 import org.jobrunr.utils.annotations.Because;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.DisabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 
 import java.io.File;
 import java.nio.file.Paths;
@@ -163,9 +165,10 @@ public abstract class AbstractJsonMapperTest {
     }
 
     @Test
+    @DisabledOnOs(OS.WINDOWS)
     void testSerializeAndDeserializeEnqueuedJobWithPathJobParameter() {
         Job job = anEnqueuedJob()
-                .withJobDetails(() -> testService.doWorkWithPath(Paths.get("/tmp", "jobrunr", "file.xml")))
+                .withJobDetails(() -> testService.doWorkWithPath(Paths.get(System.getProperty("java.io.tmpdir"), "jobrunr", "file.xml")))
                 .build();
 
         final String jobAsString = jsonMapper.serialize(job);
@@ -176,6 +179,7 @@ public abstract class AbstractJsonMapperTest {
     }
 
     @Test
+    @DisabledOnOs(OS.WINDOWS)
     void testSerializeAndDeserializeEnqueuedJobWithFileJobParameter() {
         Job job = anEnqueuedJob()
                 .withJobDetails(() -> testService.doWorkWithFile(new File("/tmp/test.txt")))

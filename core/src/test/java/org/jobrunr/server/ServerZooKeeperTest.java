@@ -6,6 +6,7 @@ import ch.qos.logback.core.read.ListAppender;
 import io.github.artsok.RepeatedIfExceptionsTest;
 import org.jobrunr.jobs.mappers.JobMapper;
 import org.jobrunr.server.dashboard.CpuAllocationIrregularityNotification;
+import org.jobrunr.server.degradation.CircuitBreaker;
 import org.jobrunr.storage.BackgroundJobServerStatus;
 import org.jobrunr.storage.InMemoryStorageProvider;
 import org.jobrunr.storage.JobRunrMetadata;
@@ -155,6 +156,7 @@ class ServerZooKeeperTest {
                 .untilAsserted(() -> assertThat(backgroundJobServer.isMaster()).isFalse());
 
         await()
+                .pollInterval(ONE_SECOND)
                 .atLeast(1, TimeUnit.SECONDS)
                 .atMost(8, TimeUnit.SECONDS)
                 .untilAsserted(() -> assertThat(storageProvider.getBackgroundJobServers()).hasSize(1));
@@ -165,34 +167,28 @@ class ServerZooKeeperTest {
     }
 
     @Test
-    void aServerThatSignalsItsAliveAlthoughItTimedOutRestartsCompletely3TimesAndThenShutsDown() {
+    void aServerThatSignalsItsAliveAlthoughItTimedOutPausesViaCircuitBreakerAndAutomaticallyRecovers() {
+        // Fast circuit breaker: opens after 2 consecutive timeouts, recovers after 500ms
+        backgroundJobServer = new BackgroundJobServer(storageProvider, new JacksonJsonMapper(), null,
+                usingStandardBackgroundJobServerConfiguration().andPollInterval(ofMillis(500)).andWorkerCount(10)) {
+            @Override
+            protected CircuitBreaker createCircuitBreaker() {
+                return new CircuitBreaker(2, 500, new CircuitBreakerPauseHandler());
+            }
+        };
         backgroundJobServer.start();
-        sleep(100);
+        await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(backgroundJobServer.isMaster()).isTrue());
 
+        // Cycle 1: simulate server timeout → circuit opens → server stops
         storageProvider.removeTimedOutBackgroundJobServers(Instant.now());
-        await()
-                .atMost(6, TimeUnit.SECONDS)
-                .untilAsserted(() -> assertThat(storageProvider.getBackgroundJobServers()).hasSize(1));
-        await().untilAsserted(() -> assertThat(backgroundJobServer.isMaster()).isTrue());
+        await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(backgroundJobServer.isStopped()).isTrue());
+        // Circuit recovers after cooldown → server re-announces and becomes master
+        await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(backgroundJobServer.isMaster()).isTrue());
 
+        // Cycle 2: verify recovery is repeatable
         storageProvider.removeTimedOutBackgroundJobServers(Instant.now());
-        await()
-                .atMost(6, TimeUnit.SECONDS)
-                .untilAsserted(() -> assertThat(storageProvider.getBackgroundJobServers()).hasSize(1));
-        await().untilAsserted(() -> assertThat(backgroundJobServer.isMaster()).isTrue());
-
-        storageProvider.removeTimedOutBackgroundJobServers(Instant.now());
-        await()
-                .atMost(6, TimeUnit.SECONDS)
-                .untilAsserted(() -> assertThat(storageProvider.getBackgroundJobServers()).hasSize(1));
-        await().untilAsserted(() -> assertThat(backgroundJobServer.isMaster()).isTrue());
-
-        storageProvider.removeTimedOutBackgroundJobServers(Instant.now());
-        await()
-                .during(FIVE_SECONDS)
-                .atMost(10, TimeUnit.SECONDS)
-                .untilAsserted(() -> assertThat(storageProvider.getBackgroundJobServers()).isEmpty());
-        await().untilAsserted(() -> assertThat(backgroundJobServer.isMaster()).isFalse());
+        await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(backgroundJobServer.isStopped()).isTrue());
+        await().atMost(FIVE_SECONDS).untilAsserted(() -> assertThat(backgroundJobServer.isMaster()).isTrue());
     }
 
     @Test

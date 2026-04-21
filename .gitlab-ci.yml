@@ -1,0 +1,122 @@
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
+      when: never
+    - if: $CI_COMMIT_BRANCH
+    - if: $CI_COMMIT_TAG
+
+stages:
+  - build
+  - test
+  - publish
+
+variables:
+  GRADLE_OPTS: "-Dorg.gradle.daemon=false -Xmx2g"
+  GRADLE_USER_HOME: "$CI_PROJECT_DIR/.gradle"
+  TZ: "Asia/Yekaterinburg"
+
+default:
+  image: $DOCKERHUB_URL/generic-images/jobrunr-builder:gradle-9.2.0-jdk25-eclipse-temurin
+  tags:
+    - docker
+  before_script:
+    - node --version
+    - npm --version
+    - gradle -v
+    - java -version
+
+cache:
+  key:
+    files:
+      - settings.gradle
+      - build.gradle
+    prefix: "$CI_COMMIT_REF_SLUG"
+  paths:
+    - .gradle/caches
+    - core/src/main/resources/org/jobrunr/dashboard/frontend/node_modules
+
+.rules-default: &rules-default
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH
+    - if: $CI_COMMIT_TAG
+
+build:
+  stage: build
+  <<: *rules-default
+  script:
+    - gradle assemble --build-cache --no-daemon
+  artifacts:
+    paths:
+      - "**/build/libs/*.jar"
+      - "**/build/classes/"
+      - "**/build/resources/"
+      - "**/build/generated/"
+      - "core/build/"
+    expire_in: 2 hrs
+
+.test-template: &test-template
+  stage: test
+  <<: *rules-default
+  needs:
+    - build
+  dependencies:
+    - build
+  after_script:
+    - mkdir -p reports && cp -r /tmp/reports/. reports/ 2>/dev/null || true
+
+test:unit:
+  <<: *test-template
+  script:
+    - gradle test --build-cache --no-daemon -x :tests:e2e-ui:test -x :tests:e2e-vm-jdk:test
+  artifacts:
+    when: always
+    reports:
+      junit:
+        - "reports/**/TEST-*.xml"
+    paths:
+      - "reports/"
+    expire_in: 2 hrs
+
+test:java17:
+  <<: *test-template
+  script:
+    - gradle test17 --build-cache --no-daemon -x :tests:e2e-ui:test -x :tests:e2e-vm-jdk:test
+  artifacts:
+    when: always
+    reports:
+      junit:
+        - "reports/**/TEST-*.xml"
+    paths:
+      - "reports/"
+    expire_in: 2 hrs
+
+test:java25:
+  <<: *test-template
+  script:
+    - gradle test25 --build-cache --no-daemon -x :tests:e2e-ui:test -x :tests:e2e-vm-jdk:test
+  artifacts:
+    when: always
+    reports:
+      junit:
+        - "reports/**/TEST-*.xml"
+    paths:
+      - "reports/"
+    expire_in: 2 hrs
+
+publish:
+  stage: publish
+  rules:
+    - when: manual
+      allow_failure: true
+  needs:
+    - build
+  dependencies:
+    - build
+  script:
+    - gradle publish --build-cache --no-daemon
+          -PGREENDATA_PUBLIC_REPO_URL="$GREENDATA_PUBLIC_REPO_URL"
+          -PGREENDATA_INTERNAL_REPO_URL="$GREENDATA_INTERNAL_REPO_URL"
+          -PMAVEN_REPO_USER="$MAVEN_REPO_USER"
+          -PMAVEN_REPO_PASS="$MAVEN_REPO_PASS"

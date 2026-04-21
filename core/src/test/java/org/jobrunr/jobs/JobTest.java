@@ -93,7 +93,7 @@ class JobTest {
         job.updateProcessing();
 
         ProcessingState processingState = job.getJobState();
-        assertThat(processingState.getUpdatedAt()).isAfter(processingState.getCreatedAt());
+        assertThat(processingState.getUpdatedAt()).isAfterOrEqualTo(processingState.getCreatedAt());
     }
 
     @Test

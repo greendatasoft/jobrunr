@@ -377,7 +377,7 @@ public abstract class AbstractJobDetailsGeneratorTest {
 
     @Test
     void testJobLambdaWithFile() {
-        JobLambda job = () -> testService.doWorkWithFile(new File("/tmp/file.txt"));
+        JobLambda job = () -> testService.doWorkWithFile(new File(System.getProperty("java.io.tmpdir"), "/file.txt"));
 
         JobDetails jobDetails = toJobDetails(job);
         assertThat(jobDetails).hasClass(TestService.class).hasMethodName("doWorkWithFile");
@@ -385,12 +385,12 @@ public abstract class AbstractJobDetailsGeneratorTest {
         Assertions.assertThat(jobParameter.getClassName()).isEqualTo(File.class.getName());
         Assertions.assertThat(jobParameter.getObject())
                 .isInstanceOf(File.class)
-                .isEqualTo(new File("/tmp/file.txt"));
+                .isEqualTo(new File(System.getProperty("java.io.tmpdir"), "/file.txt"));
     }
 
     @Test
     void testJobLambdaWithPath() {
-        Path path = Paths.get("/tmp/file.txt");
+        Path path = Paths.get(System.getProperty("java.io.tmpdir"), "/file.txt");
         JobLambda job = () -> testService.doWorkWithPath(path);
 
         JobDetails jobDetails = toJobDetails(job);
@@ -404,7 +404,7 @@ public abstract class AbstractJobDetailsGeneratorTest {
 
     @Test
     void testJobLambdaWithPathsGetInLambda() {
-        JobLambda job = () -> testService.doWorkWithPath(Paths.get("/tmp/file.txt"));
+        JobLambda job = () -> testService.doWorkWithPath(Paths.get(System.getProperty("java.io.tmpdir"), "/file.txt"));
 
         JobDetails jobDetails = toJobDetails(job);
         assertThat(jobDetails).hasClass(TestService.class).hasMethodName("doWorkWithPath");
@@ -412,13 +412,13 @@ public abstract class AbstractJobDetailsGeneratorTest {
         Assertions.assertThat(jobParameter.getClassName()).isEqualTo(Path.class.getName());
         Assertions.assertThat(jobParameter.getObject())
                 .isInstanceOf(Path.class)
-                .isEqualTo(Paths.get("/tmp/file.txt"));
+                .isEqualTo(Paths.get(System.getProperty("java.io.tmpdir"), "/file.txt"));
     }
 
     @Test
     void testJobLambdaWithPaths() {
         for (int i = 0; i < 3; i++) {
-            final Path path = Paths.get("/tmp/file" + i + ".txt");
+            final Path path = Paths.get(System.getProperty("java.io.tmpdir"), "/file" + i + ".txt");
             JobLambda job = () -> testService.doWorkWithPath(path);
 
             JobDetails jobDetails = toJobDetails(job);
@@ -433,7 +433,7 @@ public abstract class AbstractJobDetailsGeneratorTest {
 
     @Test
     void testJobLambdaWithPathsGetMultiplePartsInLambda() {
-        JobLambda job = () -> testService.doWorkWithPath(Paths.get("/tmp", "folder", "subfolder", "file.txt"));
+        JobLambda job = () -> testService.doWorkWithPath(Paths.get(System.getProperty("java.io.tmpdir"), "folder", "subfolder", "file.txt"));
 
         JobDetails jobDetails = toJobDetails(job);
         assertThat(jobDetails).hasClass(TestService.class).hasMethodName("doWorkWithPath");
@@ -441,12 +441,12 @@ public abstract class AbstractJobDetailsGeneratorTest {
         Assertions.assertThat(jobParameter.getClassName()).isEqualTo(Path.class.getName());
         Assertions.assertThat(jobParameter.getObject())
                 .isInstanceOf(Path.class)
-                .isEqualTo(Paths.get("/tmp/folder/subfolder/file.txt"));
+                .isEqualTo(Paths.get(System.getProperty("java.io.tmpdir"), "/folder/subfolder/file.txt"));
     }
 
     @Test
     void testJobLambdaWithPathOfInLambda() {
-        JobLambda job = () -> testService.doWorkWithPath(Paths.get("/tmp/file.txt"));
+        JobLambda job = () -> testService.doWorkWithPath(Paths.get(System.getProperty("java.io.tmpdir"), "/file.txt"));
 
         JobDetails jobDetails = toJobDetails(job);
         assertThat(jobDetails).hasClass(TestService.class).hasMethodName("doWorkWithPath");
@@ -454,7 +454,7 @@ public abstract class AbstractJobDetailsGeneratorTest {
         Assertions.assertThat(jobParameter.getClassName()).isEqualTo(Path.class.getName());
         Assertions.assertThat(jobParameter.getObject())
                 .isInstanceOf(Path.class)
-                .isEqualTo(Paths.get("/tmp/file.txt"));
+                .isEqualTo(Paths.get(System.getProperty("java.io.tmpdir"), "/file.txt"));
     }
 
     @Test
@@ -741,7 +741,7 @@ public abstract class AbstractJobDetailsGeneratorTest {
 
     @Test
     void testIoCJobLambdaWithFile() {
-        IocJobLambda<TestService> iocJobLambda = (x) -> x.doWorkWithFile(new File("/tmp/file.txt"));
+        IocJobLambda<TestService> iocJobLambda = (x) -> x.doWorkWithFile(new File(System.getProperty("java.io.tmpdir"), "/file.txt"));
 
         JobDetails jobDetails = toJobDetails(iocJobLambda);
         assertThat(jobDetails).hasClass(TestService.class).hasMethodName("doWorkWithFile");
@@ -749,12 +749,12 @@ public abstract class AbstractJobDetailsGeneratorTest {
         Assertions.assertThat(jobParameter.getClassName()).isEqualTo(File.class.getName());
         Assertions.assertThat(jobParameter.getObject())
                 .isInstanceOf(File.class)
-                .isEqualTo(new File("/tmp/file.txt"));
+                .isEqualTo(new File(System.getProperty("java.io.tmpdir"), "/file.txt"));
     }
 
     @Test
     void testIoCJobLambdaWithPath() {
-        Path path = Paths.get("/tmp/file.txt");
+        Path path = Paths.get(System.getProperty("java.io.tmpdir"), "/file.txt");
         IocJobLambda<TestService> iocJobLambda = (x) -> x.doWorkWithPath(path);
 
         JobDetails jobDetails = toJobDetails(iocJobLambda);

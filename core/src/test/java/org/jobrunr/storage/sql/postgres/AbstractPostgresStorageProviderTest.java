@@ -3,6 +3,7 @@ package org.jobrunr.storage.sql.postgres;
 import com.zaxxer.hikari.HikariDataSource;
 import org.jobrunr.storage.sql.SqlStorageProviderTest;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.extension.AfterAllSubclasses;
 import org.junit.jupiter.extension.BeforeAllSubclasses;
@@ -16,6 +17,7 @@ import java.time.Instant;
 import static java.time.Instant.now;
 import static org.jobrunr.storage.sql.SqlTestUtils.toHikariDataSource;
 
+@Tag("docker")
 @ExtendWith(ForAllSubclassesExtension.class)
 public abstract class AbstractPostgresStorageProviderTest extends SqlStorageProviderTest {
 

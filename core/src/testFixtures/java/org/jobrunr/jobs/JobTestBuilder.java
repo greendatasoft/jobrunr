@@ -94,6 +94,12 @@ public class JobTestBuilder {
                 .withState(new EnqueuedState());
     }
 
+    public static JobTestBuilder anEnqueuedJob(Instant createAt) {
+        return aJob()
+                .withName("an enqueued job")
+                .withState(new EnqueuedState(createAt));
+    }
+
     public static JobTestBuilder anEnqueuedJobThatTakesLong() {
         return aJob()
                 .withName("an enqueued job that takes long")

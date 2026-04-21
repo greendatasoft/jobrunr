@@ -4,8 +4,6 @@ plugins {
     id 'signing'
 }
 
-version = "v8.5.0-SNAPSHOT"
-
 dependencies {
     constraints {
         api 'org.slf4j:slf4j-api:2.0.17'
@@ -97,17 +95,6 @@ publishing {
                     developerConnection = 'scm:git@github.com:jobrunr/jobrunr.git'
                     url = 'https://github.com/jobrunr/jobrunr.git'
                 }
-            }
-        }
-    }
-    repositories {
-        maven {
-            var releasesUrl = "$GREENDATA_PUBLIC_REPO_URL"
-            var snapshotsUrl = "$GREENDATA_INTERNAL_REPO_URL"
-            url = (version.toString().endsWith("SNAPSHOT")) ? snapshotsUrl : releasesUrl
-            credentials {
-                username "$MAVEN_REPO_USER"
-                password "$MAVEN_REPO_PASS"
             }
         }
     }

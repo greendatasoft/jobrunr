@@ -150,7 +150,7 @@ public class BackgroundJobByIoCJobLambdaTest {
 
     @Test
     void testEnqueueWithPath() {
-        JobId jobId = BackgroundJob.<TestService>enqueue(x -> x.doWorkWithPath(Path.of("/tmp/jobrunr/example.log")));
+        JobId jobId = BackgroundJob.<TestService>enqueue(x -> x.doWorkWithPath(Path.of(System.getProperty("java.io.tmpdir"), "jobrunr", "example.log")));
         await().atMost(FIVE_SECONDS).until(() -> storageProvider.getJobById(jobId).getState() == SUCCEEDED);
         assertThat(storageProvider.getJobById(jobId)).hasStates(ENQUEUED, PROCESSING, SUCCEEDED);
     }

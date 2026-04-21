@@ -107,7 +107,7 @@ public abstract class AbstractTaskTest {
         return spy(new BackgroundJobServer(storageProvider, jsonMapper, null, configuration) {
             @Override
             protected JobSteward createJobSteward() {
-                return jobSteward;
+                return AbstractTaskTest.this.jobSteward;
             }
 
             @Override
