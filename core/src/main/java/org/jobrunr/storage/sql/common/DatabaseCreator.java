@@ -34,13 +34,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.Callable;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.function.Consumer;
-import java.util.function.Function;
 import java.util.stream.Stream;
 
 import static java.lang.Thread.sleep;
@@ -150,10 +147,11 @@ public class DatabaseCreator {
             String catalog = conn.getCatalog();
             DatabaseMetaData md = conn.getMetaData();
 
-            String pattern = "%jobrunr%";
-            if (md.storesUpperCaseIdentifiers()) pattern = pattern.toUpperCase();
-            else if (md.storesLowerCaseIdentifiers()) pattern = pattern.toLowerCase();
-            try (ResultSet tables = conn.getMetaData().getTables(catalog, null, pattern, null)) {
+            String pattern = "%";
+            if (md.storesMixedCaseIdentifiers()) pattern = "%";
+            else if (md.storesUpperCaseIdentifiers()) pattern = "%JOBRUNR%";
+            else if (md.storesLowerCaseIdentifiers()) pattern = "%jobrunr%";
+            try (ResultSet tables = md.getTables(catalog, null, pattern, null)) {
                 while (tables.next()) {
                     if (tablePrefixStatementUpdater.getSchema() != null) {
                         String tableSchema = tables.getString("TABLE_SCHEM");
