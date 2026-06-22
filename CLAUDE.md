@@ -82,8 +82,9 @@ The build produces a multirelease JAR. Java 17-specific code lives under `src/ma
 
 ## Technology Stack
 
-- **Java 8** source compatibility for core library; tests compile at Java 11
-- **Gradle** build system
+- **Java 26** runs the build and tests (the JDK the Gradle daemon / test executors use). Required because every `Test` task passes the JDK 26-only JVM arg `--illegal-final-field-mutation=deny`; on an older JDK the test JVM fails to start with `Unrecognized option`.
+- **Java 8** source compatibility for core library; tests compile at Java 11. Multirelease code targets Java 17 (`src/main/java17`) and Java 25 (`src/main/java25`).
+- **Gradle 9.5.0** build system (pinned in `gradle/wrapper/gradle-wrapper.properties`)
 - **ASM 9.x** — bytecode analysis for lambda job extraction
 - **JUnit 5, Mockito, AssertJ, Awaitility** — testing
 - **Testcontainers** — database integration tests

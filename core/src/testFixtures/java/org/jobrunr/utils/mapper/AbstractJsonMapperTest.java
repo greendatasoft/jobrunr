@@ -1,5 +1,6 @@
 package org.jobrunr.utils.mapper;
 
+import org.assertj.core.api.Assertions;
 import org.jobrunr.jobs.Job;
 import org.jobrunr.jobs.RecurringJob;
 import org.jobrunr.jobs.carbonaware.CarbonIntensityForecastAssert;
@@ -25,6 +26,9 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 
 import static java.time.Instant.now;
@@ -33,6 +37,7 @@ import static java.time.temporal.ChronoUnit.HOURS;
 import static java.util.Collections.emptyList;
 import static java.util.Collections.singleton;
 import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.data.Index.atIndex;
 import static org.jobrunr.JobRunrAssertions.assertThat;
 import static org.jobrunr.JobRunrAssertions.assertThatJson;
 import static org.jobrunr.JobRunrAssertions.contentOfResource;
@@ -46,7 +51,7 @@ import static org.jobrunr.jobs.RecurringJobTestBuilder.aDefaultRecurringJob;
 public abstract class AbstractJsonMapperTest {
 
     protected JsonMapper jsonMapper;
-    private TestService testService;
+    protected TestService testService;
 
     @BeforeEach
     void setUp() {
@@ -70,7 +75,7 @@ public abstract class AbstractJsonMapperTest {
     @Test
     void testSerializeAndDeserializeEnqueuedJobWithCustomObject() {
         Job job = anEnqueuedJob()
-                .withJobDetails(() -> testService.doWork(new TestService.Work(3, "a String", UUID.randomUUID())))
+                .withJobLambda(() -> testService.doWork(new TestService.Work(3, "a String", UUID.randomUUID())))
                 .build();
 
         final String jobAsString = jsonMapper.serialize(job);
@@ -83,7 +88,7 @@ public abstract class AbstractJsonMapperTest {
     @Test
     void testSerializeAndDeserializeEnqueuedJobWithNullObject() {
         Job job = anEnqueuedJob()
-                .withJobDetails(() -> testService.doWork((TestService.Work) null))
+                .withJobLambda(() -> testService.doWork((TestService.Work) null))
                 .build();
 
         final String jobAsString = jsonMapper.serialize(job);
@@ -96,7 +101,7 @@ public abstract class AbstractJsonMapperTest {
     @Test
     void testSerializeAndDeserializeWithJobContext() {
         Job job = anEnqueuedJob()
-                .withJobDetails(() -> testService.doWork(5, JobContext.Null))
+                .withJobLambda(() -> testService.doWork(5, JobContext.Null))
                 .build();
 
         final String jobAsString = jsonMapper.serialize(job);
@@ -128,7 +133,7 @@ public abstract class AbstractJsonMapperTest {
     @Test
     void testSerializeAndDeserializeEnqueuedJobWithInstantJobParameter() {
         Job job = anEnqueuedJob()
-                .withJobDetails(() -> testService.doWork(UUID.randomUUID(), 3, now()))
+                .withJobLambda(() -> testService.doWork(UUID.randomUUID(), 3, now()))
                 .build();
 
         final String jobAsString = jsonMapper.serialize(job);
@@ -141,7 +146,7 @@ public abstract class AbstractJsonMapperTest {
     @Test
     void testSerializeAndDeserializeEnqueuedJobWithLocalDateTimeJobParameter() {
         Job job = anEnqueuedJob()
-                .withJobDetails(() -> testService.doWork(LocalDateTime.now(ZoneId.systemDefault())))
+                .withJobLambda(() -> testService.doWork(LocalDateTime.now(ZoneId.systemDefault())))
                 .build();
 
         final String jobAsString = jsonMapper.serialize(job);
@@ -154,7 +159,7 @@ public abstract class AbstractJsonMapperTest {
     @Test
     void testSerializeAndDeserializeEnqueuedJobWithOffsetDateTimeJobParameter() {
         Job job = anEnqueuedJob()
-                .withJobDetails(() -> testService.doWork(OffsetDateTime.now(ZoneId.systemDefault())))
+                .withJobLambda(() -> testService.doWork(OffsetDateTime.now(ZoneId.systemDefault())))
                 .build();
 
         final String jobAsString = jsonMapper.serialize(job);
@@ -168,7 +173,7 @@ public abstract class AbstractJsonMapperTest {
     @DisabledOnOs(OS.WINDOWS)
     void testSerializeAndDeserializeEnqueuedJobWithPathJobParameter() {
         Job job = anEnqueuedJob()
-                .withJobDetails(() -> testService.doWorkWithPath(Paths.get(System.getProperty("java.io.tmpdir"), "jobrunr", "file.xml")))
+                .withJobLambda(() -> testService.doWorkWithPath(Paths.get(System.getProperty("java.io.tmpdir"), "jobrunr", "file.xml")))
                 .build();
 
         final String jobAsString = jsonMapper.serialize(job);
@@ -182,7 +187,7 @@ public abstract class AbstractJsonMapperTest {
     @DisabledOnOs(OS.WINDOWS)
     void testSerializeAndDeserializeEnqueuedJobWithFileJobParameter() {
         Job job = anEnqueuedJob()
-                .withJobDetails(() -> testService.doWorkWithFile(new File("/tmp/test.txt")))
+                .withJobLambda(() -> testService.doWorkWithFile(new File("/tmp/test.txt")))
                 .build();
 
         final String jobAsString = jsonMapper.serialize(job);
@@ -193,9 +198,25 @@ public abstract class AbstractJsonMapperTest {
     }
 
     @Test
+    void testSerializeAndDeserializeEnqueuedJobWithListParameter() {
+        Job job = anEnqueuedJob()
+                .withJobLambda(() -> testService.doWorkWithList(new ArrayList<>(List.of("abc"))))
+                .build();
+
+        final String jobAsString = jsonMapper.serialize(job);
+        assertThatJson(jobAsString).isEqualTo(contentOfResource("/org/jobrunr/utils/mapper/enqueued-job-list-parameter.json"));
+
+        Job actualJob = jsonMapper.deserialize(jobAsString, Job.class);
+        assertThat(actualJob).isEqualTo(job);
+        assertThat(actualJob.getJobDetails())
+                .hasArg(x -> Assertions.assertThat(x.getObject()).isInstanceOf(List.class), atIndex(0))
+                .hasArgs(singleton("abc"));
+    }
+
+    @Test
     void testSerializeAndDeserializeEnqueuedJobWithInterfaceAsJobParameter() {
         Job job = anEnqueuedJob()
-                .withJobDetails(() -> testService.doWorkWithCommand(new TestService.SimpleCommand("Hello", 5)))
+                .withJobLambda(() -> testService.doWorkWithCommand(new TestService.SimpleCommand("Hello", 5)))
                 .build();
 
         final String jobAsString = jsonMapper.serialize(job);
@@ -243,7 +264,7 @@ public abstract class AbstractJsonMapperTest {
     @Because("https://github.com/jobrunr/jobrunr/issues/254")
     void testSerializeAndDeserializeEnqueuedJobAfter4Dot0Dot0() {
         Job job = anEnqueuedJob()
-                .withJobDetails(() -> testService.doWork(1L))
+                .withJobLambda(() -> testService.doWork(1L))
                 .build();
 
         final String jobAsString = jsonMapper.serialize(job);
@@ -258,7 +279,7 @@ public abstract class AbstractJsonMapperTest {
                 .withId(UUID.fromString("8bf98a10-f673-4fd8-9b9c-43ded0030910"))
                 .withName("an enqueued job")
                 .withState(new EnqueuedState(), Instant.parse("2021-11-10T11:37:40.551537Z"))
-                .withJobDetails(() -> testService.doWork(1L))
+                .withJobLambda(() -> testService.doWork(1L))
                 .build();
 
         final String jobAsString = jsonMapper.serialize(job);
@@ -271,7 +292,7 @@ public abstract class AbstractJsonMapperTest {
         final String jobAsStringFrom4Dot0Dot0 = contentOfResource("/org/jobrunr/utils/mapper/enqueued-job-github-254-input.json");
 
         final Job actualJobFrom4Dot0Dot0 = jsonMapper.deserialize(jobAsStringFrom4Dot0Dot0, Job.class);
-        assertThat(actualJobFrom4Dot0Dot0).isEqualTo(job, "locker", "labels", "newState");
+        assertThat(actualJobFrom4Dot0Dot0).isEqualTo(job, "locker", "labels", "newState", "stateIndexBeforeStateChange");
     }
 
     @Test
@@ -283,7 +304,7 @@ public abstract class AbstractJsonMapperTest {
                 .withId(UUID.fromString("8bf98a10-f673-4fd8-9b9c-43ded0030910"))
                 .withName("an enqueued job")
                 .withState(new EnqueuedState(), Instant.parse("2021-11-10T11:37:40.551537Z"))
-                .withJobDetails(() -> testService.doWork(xValues, yValues))
+                .withJobLambda(() -> testService.doWork(xValues, yValues))
                 .build();
 
         final String jobAsString = jsonMapper.serialize(job);
@@ -318,21 +339,38 @@ public abstract class AbstractJsonMapperTest {
 
     @Test
     @Because("https://github.com/jobrunr/jobrunr/issues/282")
-    void testCanSerializeCollections() {
+    protected void testCanSerializeSetToCollection() {
         Long value = Integer.MAX_VALUE + 2L;
-        Job job = anEnqueuedJob().withJobDetails(() -> testService.doWorkWithCollection(singleton(value))).build();
+        Job job = anEnqueuedJob().withJobLambda(() -> testService.doWorkWithCollection(Set.of(value))).build();
 
         String jobAsString = jsonMapper.serialize(job);
 
         Job deserializedJob = jsonMapper.deserialize(jobAsString, Job.class);
         assertThat(deserializedJob.getJobDetails())
+                .hasArg(x -> assertThat(x.getObject()).isInstanceOf(Set.class), atIndex(0))
+                .hasArgs(singleton(value));
+
+    }
+
+    @Test
+    @Because("https://github.com/jobrunr/jobrunr/issues/282")
+    protected void testCanSerializeListToCollections() {
+        Long value = Integer.MAX_VALUE + 2L;
+        Job job = anEnqueuedJob().withJobLambda(() -> testService.doWorkWithCollection(List.of(value))).build();
+
+        String jobAsString = jsonMapper.serialize(job);
+
+        Job deserializedJob = jsonMapper.deserialize(jobAsString, Job.class);
+
+        assertThat(deserializedJob.getJobDetails())
+                .hasArg(x -> assertThat(x.getObject()).isInstanceOf(List.class), atIndex(0))
                 .hasArgs(singleton(value));
     }
 
     @Test
     @Because("https://github.com/jobrunr/jobrunr/issues/375")
     void testCanSerializeEnums() {
-        Job job = anEnqueuedJob().withJobDetails(() -> testService.doWorkWithEnum(Task.PROGRAMMING)).build();
+        Job job = anEnqueuedJob().withJobLambda(() -> testService.doWorkWithEnum(Task.PROGRAMMING)).build();
 
         String jobAsString = jsonMapper.serialize(job);
 
@@ -346,7 +384,7 @@ public abstract class AbstractJsonMapperTest {
         Job job = anEnqueuedJob()
                 .withAmountOfRetries(6)
                 .withRecurringJobId("my-recurring-job")
-                .withJobDetails(() -> testService.doWorkWithEnum(Task.PROGRAMMING))
+                .withJobLambda(() -> testService.doWorkWithEnum(Task.PROGRAMMING))
                 .withProcessingState()
                 .withFailedState()
                 .withCarbonAwareAwaitingState(CarbonAwarePeriod.between(Instant.now(), Instant.now().plus(10, HOURS)))

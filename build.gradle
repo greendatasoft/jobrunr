@@ -45,7 +45,7 @@ task nexusPushFromStagingToCentral {
 
 subprojects {
     group = 'org.jobrunr'
-    version = "v8.5.2-SNAPSHOT".replace("v", "")
+    version = "v8.7.0-SNAPSHOT".replace("v", "")
 }
 
 def isNonStable = { String version ->
@@ -68,9 +68,14 @@ sonar {
 
 allprojects {
     repositories {
-        mavenLocal()
-        // maven { url = 'https://repo.jobrunr.io/maven-central-proxy' }
+        if (System.getenv('CI') && System.getenv('MAVEN_CENTRAL_PROXY_URL')) {
+            maven {
+                url = System.getenv('MAVEN_CENTRAL_PROXY_URL')
+                allowInsecureProtocol = true
+            }
+        }
         mavenCentral()
+        mavenLocal()
     }
 }
 
@@ -114,6 +119,7 @@ configure(subprojects.findAll { !['platform'].contains(it.name) }) {
             disable("JavaDurationGetSecondsToToSeconds")        // we can't update to JDK9 just yet
             disable("StringCaseLocaleUsage")                    // we are never going to run into this issue
             disable("TypeParameterUnusedInFormals")            // due to heavy reflection usage in JobRunr
+            disable("InlineMeSuggester")                        // Do not want to depend on an annotation
         }
     }
 
@@ -125,8 +131,9 @@ configure(subprojects.findAll { !['platform'].contains(it.name) }) {
         implementation platform(project(':platform'))
         compileOnly 'org.apache.groovy:groovy-json:4.0.29'
 
-        errorprone 'com.google.errorprone:error_prone_core:2.48.0'
+        errorprone 'com.google.errorprone:error_prone_core:2.50.0'
 
+        testImplementation platform("org.junit:junit-bom:5.14.4")
         testImplementation 'org.junit.jupiter:junit-jupiter'
         testImplementation 'io.github.artsok:rerunner-jupiter'
         testImplementation 'org.awaitility:awaitility'
