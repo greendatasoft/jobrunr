@@ -15,7 +15,6 @@ import java.net.URI;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Collection;
-import java.util.Set;
 
 import static org.jobrunr.utils.mapper.JsonMapperUtils.Json.FIELD_ACTUAL_CLASS_NAME;
 import static org.jobrunr.utils.mapper.JsonMapperUtils.Json.FIELD_CLASS_NAME;
@@ -43,20 +42,6 @@ public class JobParameterDeserializer extends StdDeserializer<JobParameter> {
     private JobParameter getJobParameter(DeserializationContext deserializationContext, String className, String actualClassName, JsonNode objectJsonNode) {
         try {
             Class<Object> valueType = toClass(getActualClassName(className, actualClassName));
-            if (objectJsonNode.isArray() && objectJsonNode.size() == 1 && objectJsonNode.get(0).isArray()) {
-                ArrayNode wrapperArray = (ArrayNode) objectJsonNode.get(0);
-
-                // in case of [["java.lang.Long", 12345]] - this is "correctly" serialized and was also the case in Jackson 2
-                if (wrapperArray.size() == 2 && wrapperArray.get(0).isTextual()) {
-                    Class<?> targetType = toClass(wrapperArray.get(0).asText());
-                    final Object object = deserializationContext.readTreeAsValue(wrapperArray.get(1), targetType);
-                    // because the original was a [[...]]; re-wrap this inside a set collection
-                    if (Collection.class.isAssignableFrom(valueType) || valueType.getName().contains("Collections$")) {
-                        return new JobParameter(className, Set.of(object));
-                    }
-                    return new JobParameter(className, object);
-                }
-            }
 
             if (objectJsonNode.isArray() && !Collection.class.isAssignableFrom(valueType) && !valueType.isArray()) { // why: regression form 4.0.1: See https://github.com/jobrunr/jobrunr/issues/254
                 final JsonNode jsonNodeInArray = objectJsonNode.get(1);

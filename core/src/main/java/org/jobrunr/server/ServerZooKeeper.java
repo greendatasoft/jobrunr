@@ -126,6 +126,12 @@ public class ServerZooKeeper implements Runnable {
         }
     }
 
+    private void resetServer() {
+        backgroundJobServer.setIsMaster(false);
+        backgroundJobServer.stop();
+        backgroundJobServer.start();
+    }
+
     private void stopServer() {
         backgroundJobServer.stop();
     }

@@ -1,11 +1,16 @@
 pluginManagement {
     repositories {
-        mavenLocal()
-        // maven { url = 'https://repo.jobrunr.io/maven-central-proxy' }
+        if (System.getenv('CI')) {
+            maven {
+                url = System.getenv('MAVEN_CENTRAL_PROXY_URL')
+                allowInsecureProtocol = true
+            }
+        }
         mavenCentral()
         maven { url = 'https://plugins.gradle.org/m2/' }
         maven { url = 'https://repo.spring.io/release' }
         maven { url = 'https://repo.spring.io/milestone' }
+        mavenLocal()
     }
 }
 
@@ -14,20 +19,20 @@ buildCache {
         enabled = true
     }
 
-//    if (System.getenv('CI')) {
-//        remote(HttpBuildCache) {
-//            url = uri("http://192.168.129.102:5071/cache/")
-//            push = true
-//            allowInsecureProtocol = true
-//            credentials {
-//                username = System.getenv('BUILD_CACHE_USER')
-//                password = System.getenv('BUILD_CACHE_PASSWORD')
-//            }
-//        }
-//    }
+    if (System.getenv('CI')) {
+        remote(HttpBuildCache) {
+            url = System.getenv('BUILD_CACHE_URL')
+            push = true
+            allowInsecureProtocol = true
+            credentials {
+                username = System.getenv('BUILD_CACHE_USER')
+                password = System.getenv('BUILD_CACHE_PASSWORD')
+            }
+        }
+    }
 }
 
-rootProject.name = 'JobRunr'
+rootProject.name = 'jobrunr'
 include ':platform'
 include ':core'
 include ':language-support:jobrunr-kotlin-support'
