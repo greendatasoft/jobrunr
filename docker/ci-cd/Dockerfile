@@ -1,8 +1,8 @@
 # check=skip=InvalidDefaultArgInFrom
 ARG DOCKER_REGISTRY
-FROM ${DOCKER_REGISTRY}/proxy-images/eclipse-temurin:25-jdk-amd64
+FROM ${DOCKER_REGISTRY}/proxy-images/eclipse-temurin:26-jdk-amd64
 
-ENV GRADLE_VERSION=9.2.0
+ENV GRADLE_VERSION=9.5.0
 ENV GRADLE_HOME=/opt/gradle/gradle-${GRADLE_VERSION}
 ENV PATH=${GRADLE_HOME}/bin:${PATH}
 

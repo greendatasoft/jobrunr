@@ -17,7 +17,7 @@ variables:
   TZ: "Asia/Yekaterinburg"
 
 default:
-  image: $DOCKERHUB_URL/generic-images/jobrunr-builder:gradle-9.2.0-jdk25-eclipse-temurin
+  image: $DOCKERHUB_URL/generic-images/jobrunr-builder:gradle-9.5.0-jdk26-eclipse-temurin
   tags:
     - docker
   before_script:

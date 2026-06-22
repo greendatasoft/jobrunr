@@ -168,11 +168,17 @@ class ServerZooKeeperTest {
 
     @Test
     void aServerThatSignalsItsAliveAlthoughItTimedOutRestartsAndRenegotiatesWhoIsMaster() {
+        // Fast circuit breaker: opens after 2 consecutive timeouts, recovers after 500ms
+        backgroundJobServer = new BackgroundJobServer(storageProvider, new JacksonJsonMapper(), null,
+                usingStandardBackgroundJobServerConfiguration().andPollInterval(ofMillis(500)).andWorkerCount(10)) {
+            @Override
+            protected CircuitBreaker createCircuitBreaker() {
+                return new CircuitBreaker(2, 500, new CircuitBreakerPauseHandler());
+            }
+        };
         storageProvider.save(anEnqueuedJob().<TestService>withJobLambda(ts -> ts.doWorkThatTakesLong(2)).build());
         backgroundJobServer.start();
-        sleep(100);
-
-        assertThat(backgroundJobServer).isMaster(true);
+        await().atMost(2, TimeUnit.SECONDS).untilAsserted(() -> assertThat(backgroundJobServer).isMaster(true));
 
         storageProvider.removeTimedOutBackgroundJobServers(Instant.now());
         await()
