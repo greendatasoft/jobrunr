@@ -1,6 +1,6 @@
 pluginManagement {
     repositories {
-        if (System.getenv('CI')) {
+        if (System.getenv('CI') && System.getenv('MAVEN_CENTRAL_PROXY_URL')) {
             maven {
                 url = System.getenv('MAVEN_CENTRAL_PROXY_URL')
                 allowInsecureProtocol = true
