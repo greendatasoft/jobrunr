@@ -19,7 +19,7 @@ buildCache {
         enabled = true
     }
 
-    if (System.getenv('CI')) {
+    if (System.getenv('CI') && System.getenv('BUILD_CACHE_URL')) {
         remote(HttpBuildCache) {
             url = System.getenv('BUILD_CACHE_URL')
             push = true
