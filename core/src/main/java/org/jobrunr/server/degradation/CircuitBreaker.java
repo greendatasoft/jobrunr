@@ -43,16 +43,34 @@ public class CircuitBreaker {
         return state.get() == State.CLOSED;
     }
 
+    /**
+     * Records a failure. Only <em>consecutive</em> failures open the circuit breaker: every successful run must call
+     * {@link #recordSuccess()}, otherwise unrelated failures spread over hours or days accumulate and eventually stop
+     * a perfectly healthy BackgroundJobServer.
+     */
     public void recordFailure() {
         lastFailureTime.set(System.currentTimeMillis());
 
-        int currentFailures = failureCount.incrementAndGet();
-        if (currentFailures >= failureThreshold) {
-            if (state.compareAndSet(State.CLOSED, State.OPEN)) {
-                lastStateChangeTime.set(System.currentTimeMillis());
-                notifyStateChange(State.OPEN);
-                scheduleRecovery();
-            }
+        if (failureCount.incrementAndGet() >= failureThreshold) {
+            open();
+        }
+    }
+
+    /**
+     * Opens the circuit breaker immediately (e.g. when the BackgroundJobServer detected it is in an unrecoverable
+     * state) so the {@link CircuitBreakerHandler} can stop and restart it after the cooldown period.
+     */
+    public void trip() {
+        lastFailureTime.set(System.currentTimeMillis());
+        failureCount.set(failureThreshold);
+        open();
+    }
+
+    private void open() {
+        if (state.compareAndSet(State.CLOSED, State.OPEN)) {
+            lastStateChangeTime.set(System.currentTimeMillis());
+            notifyStateChange(State.OPEN);
+            scheduleRecovery();
         }
     }
 

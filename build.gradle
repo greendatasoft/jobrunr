@@ -45,7 +45,7 @@ task nexusPushFromStagingToCentral {
 
 subprojects {
     group = 'org.jobrunr'
-    version = "v8.7.0-SNAPSHOT".replace("v", "")
+    version = "v8.7.1-SNAPSHOT".replace("v", "")
 }
 
 def isNonStable = { String version ->

@@ -5,11 +5,13 @@ import org.jobrunr.server.dashboard.DashboardNotificationManager;
 import org.jobrunr.storage.BackgroundJobServerStatus;
 import org.jobrunr.storage.ServerTimedOutException;
 import org.jobrunr.storage.StorageProvider;
+import org.jobrunr.utils.exceptions.RepeatedExceptionFilter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -26,6 +28,9 @@ public class ServerZooKeeper implements Runnable {
     private final DashboardNotificationManager dashboardNotificationManager;
     private final Duration timeoutDuration;
     private final AtomicInteger restartAttempts;
+    private final AtomicInteger stalledJobHandlerAttempts;
+    // why: an outage of the StorageProvider would otherwise log the same stacktrace every poll interval
+    private final RepeatedExceptionFilter unrecoverableErrorFilter;
     private UUID masterId;
     private Instant lastSignalAlive;
     private Instant lastServerTimeoutCheck;
@@ -36,6 +41,8 @@ public class ServerZooKeeper implements Runnable {
         this.dashboardNotificationManager = backgroundJobServer.getDashboardNotificationManager();
         this.timeoutDuration = backgroundJobServer.getConfiguration().getPollInterval().multipliedBy(backgroundJobServer.getConfiguration().getServerTimeoutPollIntervalMultiplicand());
         this.restartAttempts = new AtomicInteger();
+        this.stalledJobHandlerAttempts = new AtomicInteger();
+        this.unrecoverableErrorFilter = new RepeatedExceptionFilter();
         this.lastSignalAlive = Instant.now();
         this.lastServerTimeoutCheck = Instant.now();
         if (LOGGER.isTraceEnabled()) LOGGER.trace(systemSupportsSleepDetection()
@@ -51,13 +58,22 @@ public class ServerZooKeeper implements Runnable {
         try {
             if (backgroundJobServer.isUnAnnounced()) {
                 announceBackgroundJobServer();
+                backgroundJobServer.getCircuitBreaker().recordSuccess();
             } else {
                 signalBackgroundJobServerAliveAndDoZooKeeping();
             }
         } catch (Exception shouldNotHappen) {
-            LOGGER.error("An unrecoverable error occurred. ", shouldNotHappen);
+            logUnrecoverableError(shouldNotHappen);
             if (masterId == null) backgroundJobServer.setIsMaster(null);
             backgroundJobServer.getCircuitBreaker().recordFailure();
+        }
+    }
+
+    private void logUnrecoverableError(Exception e) {
+        if (unrecoverableErrorFilter.isFirstOccurrence(e)) {
+            LOGGER.error("An unrecoverable error occurred in {}.", backgroundJobServer, e);
+        } else {
+            LOGGER.error("{} keeps failing with the same error ({} times in a row, see the stacktrace above): {}", backgroundJobServer, unrecoverableErrorFilter.getRepeatCount(), e.toString());
         }
     }
 
@@ -84,9 +100,32 @@ public class ServerZooKeeper implements Runnable {
             signalBackgroundJobServerAlive();
             deleteServersThatTimedOut();
             determineIfCurrentBackgroundJobServerIsMaster();
+            backgroundJobServer.retryStartupTasksIfNeeded();
+            ensureJobHandlersAreRunning();
+            // why: only failures that happen consecutively may open the circuit breaker and stop this server
+            backgroundJobServer.getCircuitBreaker().recordSuccess();
         } catch (ServerTimedOutException e) {
             LOGGER.error("SEVERE ERROR - {} timed out while it's still alive. Are all servers using NTP and in the same timezone? Are you having long GC cycles? Restart attempt {} out of 3", backgroundJobServer, restartAttempts.incrementAndGet(), e);
             backgroundJobServer.getCircuitBreaker().recordFailure();
+        }
+    }
+
+    private void ensureJobHandlersAreRunning() {
+        List<JobHandler> stalledJobHandlers = backgroundJobServer.getStalledJobHandlers(timeoutDuration);
+        if (stalledJobHandlers.isEmpty()) {
+            stalledJobHandlerAttempts.set(0);
+            return;
+        }
+
+        int attempt = stalledJobHandlerAttempts.incrementAndGet();
+        if (attempt == 1 && backgroundJobServer.hasStalledMasterTasksOnly(stalledJobHandlers)) {
+            LOGGER.error("SEVERE ERROR - {} did not run {} for more than {}. Restarting the master tasks.", backgroundJobServer, stalledJobHandlers, timeoutDuration);
+            backgroundJobServer.restartMasterTasks();
+        } else {
+            LOGGER.error("SEVERE ERROR - {} did not run {} for more than {} (are all threads of the zookeeper thread pool blocked - e.g. on a database call without a socket timeout?). Restarting the BackgroundJobServer.",
+                    backgroundJobServer, stalledJobHandlers, timeoutDuration);
+            stalledJobHandlerAttempts.set(0);
+            backgroundJobServer.getCircuitBreaker().trip();
         }
     }
 
@@ -106,7 +145,7 @@ public class ServerZooKeeper implements Runnable {
 
             final int amountOfServersThatTimedOut = storageProvider.removeTimedOutBackgroundJobServers(timedOutInstant);
             if (amountOfServersThatTimedOut > 0) {
-                LOGGER.info("Removed {} server(s) that timed out", amountOfServersThatTimedOut);
+                LOGGER.info("{} removed {} BackgroundJobServer(s) that timed out (no heartbeat since {})", backgroundJobServer, amountOfServersThatTimedOut, timedOutInstant);
             }
             this.lastServerTimeoutCheck = now;
         }
@@ -118,11 +157,25 @@ public class ServerZooKeeper implements Runnable {
             this.masterId = longestRunningBackgroundJobServerId;
             if (masterId.equals(backgroundJobServer.getId())) {
                 backgroundJobServer.setIsMaster(true);
-                LOGGER.info("Server {} is master (this BackgroundJobServer)", masterId);
+                LOGGER.info("{} is master (this BackgroundJobServer)", backgroundJobServer);
             } else {
                 backgroundJobServer.setIsMaster(false);
-                LOGGER.info("Server {} is master (another BackgroundJobServer)", masterId);
+                LOGGER.info("{} is master (another BackgroundJobServer) - this is {}", describeBackgroundJobServer(masterId), backgroundJobServer);
             }
+        }
+    }
+
+    private String describeBackgroundJobServer(UUID backgroundJobServerId) {
+        try {
+            return storageProvider.getBackgroundJobServers().stream()
+                    .filter(serverStatus -> backgroundJobServerId.equals(serverStatus.getId()))
+                    .findFirst()
+                    .map(serverStatus -> String.format("BackgroundJobServer (%s - %s)", serverStatus.getName(), backgroundJobServerId))
+                    .orElseGet(() -> String.format("BackgroundJobServer (%s)", backgroundJobServerId));
+        } catch (Exception e) {
+            // why: resolving the name of another server is best effort only and may never break the zookeeper run
+            LOGGER.debug("Could not resolve the name of BackgroundJobServer {}", backgroundJobServerId, e);
+            return String.format("BackgroundJobServer (%s)", backgroundJobServerId);
         }
     }
 

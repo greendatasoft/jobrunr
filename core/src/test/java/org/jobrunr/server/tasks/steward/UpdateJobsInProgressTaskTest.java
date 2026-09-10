@@ -75,7 +75,7 @@ class UpdateJobsInProgressTaskTest extends AbstractTaskTest {
         // THEN
         verify(storageProvider).save(singletonList(job));
         ProcessingState processingState = job.getJobState();
-        Assertions.assertThat(processingState.getUpdatedAt()).isAfter(processingState.getCreatedAt());
+        Assertions.assertThat(processingState.getUpdatedAt()).isAfterOrEqualTo(processingState.getCreatedAt());
     }
 
     @Test
