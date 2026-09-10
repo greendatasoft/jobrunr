@@ -445,7 +445,7 @@ class BackgroundJobServerTest {
         backgroundJobServer.start();
 
         await().atMost(10, SECONDS)
-                .untilAsserted(() -> assertThat(logger).hasErrorMessageContaining("failed to start"));
+                .untilAsserted(() -> assertThat(logger).hasErrorMessageContaining("could not announce itself to the StorageProvider"));
     }
 
     private void deleteAllJobsPermanently(StateName... stateNames) {

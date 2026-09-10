@@ -44,15 +44,19 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.ServiceLoader;
 import java.util.Spliterator;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 import static java.lang.Integer.compare;
 import static java.time.Instant.now;
 import static java.util.Arrays.asList;
+import static java.util.Collections.emptyList;
 import static java.util.Spliterators.spliteratorUnknownSize;
 import static java.util.stream.StreamSupport.stream;
 import static org.jobrunr.JobRunrException.problematicConfigurationException;
@@ -87,6 +91,10 @@ public class BackgroundJobServer implements BackgroundJobServerMBean {
     protected volatile Instant firstHeartbeat;
     protected volatile Boolean isMaster;
     protected volatile VersionNumber dataVersion;
+    private final List<JobZooKeeper> masterTasks;
+    private final AtomicBoolean startupTasksRunning;
+    private volatile boolean startupTasksSucceeded;
+    private volatile Instant lastStartupTasksAttempt;
     private volatile PlatformThreadPoolJobRunrExecutor zookeeperThreadPool;
     private JobRunrExecutor jobExecutor;
 
@@ -114,6 +122,8 @@ public class BackgroundJobServer implements BackgroundJobServerMBean {
         this.storageProvider.validatePollInterval(this.configuration.getPollInterval());
         this.lifecycle = new BackgroundJobServerLifecycle();
         this.circuitBreaker = circuitBreaker == null ? createCircuitBreaker() : circuitBreaker;
+        this.masterTasks = new CopyOnWriteArrayList<>();
+        this.startupTasksRunning = new AtomicBoolean();
     }
 
     @Override
@@ -172,17 +182,29 @@ public class BackgroundJobServer implements BackgroundJobServerMBean {
     }
 
     public void stop(boolean resetCircuitBreaker) {
+        // why: an explicit stop must always cancel a pending circuit breaker recovery, also when this server is
+        // already being stopped by the circuit breaker itself. Otherwise it silently restarts itself after the cooldown.
+        if (resetCircuitBreaker) circuitBreaker.reset();
         if (isStopping()) return;
         try (LifecycleChangeLock lifecycleChange = lifecycle.goTo(STOP)) {
             if (isStopped()) return;
             LOGGER.info("{} stopping (may take about {})", this, configuration.getInterruptJobsAwaitDurationOnStopBackgroundJobServer());
             isMaster = null;
-            stopWorkers();
-            stopZooKeepers();
-            firstHeartbeat = null;
-            if (resetCircuitBreaker) circuitBreaker.reset();
-            LOGGER.info("{} BackgroundJobServer and BackgroundJobPerformers stopped", this);
-            lifecycleChange.succeeded();
+            try {
+                stopWorkers();
+                stopZooKeepers();
+                LOGGER.info("{} BackgroundJobServer and BackgroundJobPerformers stopped", this);
+            } catch (Exception e) {
+                // why: if stopping fails halfway, the server must still end up in the stopped state. Otherwise start()
+                // silently does nothing (as isStarted() returns true) and this server never processes jobs again.
+                LOGGER.error("{} could not be stopped gracefully - forcing it into the stopped state", this, e);
+                this.jobExecutor = null;
+                this.zookeeperThreadPool = null;
+            } finally {
+                masterTasks.clear();
+                firstHeartbeat = null;
+                lifecycleChange.succeeded();
+            }
         }
     }
 
@@ -234,8 +256,40 @@ public class BackgroundJobServer implements BackgroundJobServerMBean {
                 stopMasterTasks();
             }
         } else {
-            LOGGER.error("JobRunr {} failed to start", this);
+            LOGGER.error("JobRunr {} could not announce itself to the StorageProvider - it will not schedule or process any jobs until it succeeds", this);
         }
+    }
+
+    void restartMasterTasks() {
+        if (isStopping() || isStopped()) return;
+        try (LifecycleReadLock ignored = lifecycle.readLock()) {
+            if (zookeeperThreadPool == null || !Boolean.TRUE.equals(isMaster)) return;
+            startMasterTasks();
+        }
+    }
+
+    List<JobHandler> getStalledJobHandlers(Duration maxDurationWithoutRun) {
+        if (isStopping() || isStopped()) return emptyList();
+        Instant stalledIfBefore = now().minus(maxDurationWithoutRun);
+        List<JobHandler> stalledJobHandlers = new ArrayList<>();
+        if (jobSteward.getLastRunEndTime().isBefore(stalledIfBefore)) stalledJobHandlers.add(jobSteward);
+        masterTasks.stream()
+                .filter(masterTask -> masterTask.getLastRunEndTime().isBefore(stalledIfBefore))
+                .forEach(stalledJobHandlers::add);
+        return stalledJobHandlers;
+    }
+
+    boolean hasStalledMasterTasksOnly(List<JobHandler> stalledJobHandlers) {
+        return !stalledJobHandlers.isEmpty() && stalledJobHandlers.stream().allMatch(JobZooKeeper.class::isInstance);
+    }
+
+    void retryStartupTasksIfNeeded() {
+        if (startupTasksSucceeded || !isMaster() || startupTasksRunning.get()) return;
+        Duration retryInterval = configuration.getPollInterval().multipliedBy(configuration.getServerTimeoutPollIntervalMultiplicand());
+        if (lastStartupTasksAttempt != null && now().isBefore(lastStartupTasksAttempt.plus(retryInterval))) return;
+
+        LOGGER.warn("JobRunr {} did not complete its startup tasks successfully - retrying (no jobs are processed until they succeed).", this);
+        runStartupTasks();
     }
 
     @Override
@@ -318,29 +372,47 @@ public class BackgroundJobServer implements BackgroundJobServerMBean {
         // why fixedDelay: in case of long stop-the-world garbage collections, the zookeeper tasks will queue up
         // and all will be launched one after another
         Duration jobStewardInitialDelay = DurationUtils.min(configuration.getPollInterval().dividedBy(5), Duration.ofSeconds(1));
+        jobSteward.resetLastRunEndTime();
         zookeeperThreadPool.scheduleWithFixedDelay(serverZooKeeper, Duration.ZERO, configuration.getPollInterval());
         zookeeperThreadPool.scheduleWithFixedDelay(jobSteward, jobStewardInitialDelay, configuration.getPollInterval());
     }
 
-    private void startMasterTasks() {
+    private synchronized void startMasterTasks() {
+        // why: makes sure we never end up with 2 sets of master tasks scheduled at the same time (e.g. when this server
+        // becomes master again without having been demoted first) as that results in duplicate recurring jobs
+        stopMasterTasks();
+
+        PlatformThreadPoolJobRunrExecutor threadPool = this.zookeeperThreadPool;
+        if (threadPool == null) return;
+
         Duration masterTasksInitialDelay = DurationUtils.min(configuration.getPollInterval().dividedBy(5), Duration.ofSeconds(1));
         JobZooKeeper recurringAndCarbonAwareAndScheduledJobsZooKeeper = new JobZooKeeper(this, new ProcessRecurringJobsTask(this), new ProcessCarbonAwareAwaitingJobsTask(this), new ProcessScheduledJobsTask(this));
         JobZooKeeper orphanedJobsZooKeeper = new JobZooKeeper(this, new ProcessOrphanedJobsTask(this));
         JobZooKeeper janitorZooKeeper = new JobZooKeeper(this, new DeleteSucceededJobsTask(this), new DeleteDeletedJobsPermanentlyTask(this));
-        zookeeperThreadPool.increasePoolSize(BACKGROUND_JOB_SERVER_MASTER_TASKS_THREAD_SIZE);
-        zookeeperThreadPool.scheduleWithFixedDelay(recurringAndCarbonAwareAndScheduledJobsZooKeeper, masterTasksInitialDelay, configuration.getPollInterval());
-        zookeeperThreadPool.scheduleWithFixedDelay(orphanedJobsZooKeeper, masterTasksInitialDelay, configuration.getPollInterval());
-        zookeeperThreadPool.scheduleWithFixedDelay(janitorZooKeeper, masterTasksInitialDelay, configuration.getPollInterval());
+        threadPool.increasePoolSize(BACKGROUND_JOB_SERVER_MASTER_TASKS_THREAD_SIZE);
+        threadPool.scheduleWithFixedDelay(recurringAndCarbonAwareAndScheduledJobsZooKeeper, masterTasksInitialDelay, configuration.getPollInterval());
+        threadPool.scheduleWithFixedDelay(orphanedJobsZooKeeper, masterTasksInitialDelay, configuration.getPollInterval());
+        threadPool.scheduleWithFixedDelay(janitorZooKeeper, masterTasksInitialDelay, configuration.getPollInterval());
+        masterTasks.addAll(asList(recurringAndCarbonAwareAndScheduledJobsZooKeeper, orphanedJobsZooKeeper, janitorZooKeeper));
     }
 
-    private void stopMasterTasks() {
-        zookeeperThreadPool.cancelScheduledFuturesOfType(JobZooKeeper.class);
+    private synchronized void stopMasterTasks() {
+        masterTasks.clear();
+        PlatformThreadPoolJobRunrExecutor threadPool = this.zookeeperThreadPool;
+        if (threadPool == null) return;
+        threadPool.cancelScheduledFuturesOfType(JobZooKeeper.class);
     }
 
     private void stopZooKeepers() {
-        serverZooKeeper.stop();
-        zookeeperThreadPool.stop(Duration.ofSeconds(10));
-        this.zookeeperThreadPool = null;
+        try {
+            // why: the thread pool is stopped first as serverZooKeeper.stop() talks to the StorageProvider. If that
+            // is unreachable, it blocks until the connection timeout passes while the zookeeper tasks would otherwise
+            // keep hammering the very same StorageProvider
+            zookeeperThreadPool.stop(Duration.ofSeconds(10));
+            serverZooKeeper.stop();
+        } finally {
+            this.zookeeperThreadPool = null;
+        }
     }
 
     private void startWorkers() {
@@ -356,15 +428,29 @@ public class BackgroundJobServer implements BackgroundJobServerMBean {
     }
 
     private void runStartupTasks() {
+        if (!startupTasksRunning.compareAndSet(false, true)) return;
+
+        lastStartupTasksAttempt = now();
         ExecutorService startupTasksExecutor = Executors.newSingleThreadExecutor(new NamedThreadFactory("jobrunr-startup-task", false));
         try {
-            startupTasksExecutor.execute(new StartupTask(
-                    new CreateClusterIdIfNotExists(this),
-                    new CheckIfAllJobsExistTask(this),
-                    new MigrateFromV5toV6Task(this)
-            ));
+            startupTasksExecutor.execute(() -> {
+                try {
+                    new StartupTask(
+                            new CreateClusterIdIfNotExists(this),
+                            new CheckIfAllJobsExistTask(this),
+                            new MigrateFromV5toV6Task(this)
+                    ).run();
+                    startupTasksSucceeded = true;
+                } catch (Exception e) {
+                    // why: without successful startup tasks no job is processed at all, so it must be retried
+                    LOGGER.error("JobRunr {} could not run all startup tasks", this, e);
+                } finally {
+                    startupTasksRunning.set(false);
+                }
+            });
         } catch (Exception notImportant) {
             // server is shut down immediately
+            startupTasksRunning.set(false);
         } finally {
             startupTasksExecutor.shutdown();
         }
@@ -442,7 +528,7 @@ public class BackgroundJobServer implements BackgroundJobServerMBean {
         @Override
         public void onStateChange(State newState) {
             if (newState == State.OPEN) {
-                LOGGER.warn("Circuit Breaker OPENED, Service pausing");
+                LOGGER.warn("{} - Circuit Breaker OPENED, stopping this BackgroundJobServer until it recovers", BackgroundJobServer.this);
                 // stop() must not run on the zookeeper pool thread that triggered the failure:
                 // stopZooKeepers() awaits termination of that very pool and would deadlock.
                 // Pass resetCircuitBreaker=false so the scheduled recovery can still fire.
@@ -450,10 +536,17 @@ public class BackgroundJobServer implements BackgroundJobServerMBean {
                 t.setDaemon(true);
                 t.start();
             } else if (newState == State.CLOSED) {
-                LOGGER.warn("Circuit Breaker CLOSED, Service recovered");
+                LOGGER.warn("{} - Circuit Breaker CLOSED, restarting this BackgroundJobServer", BackgroundJobServer.this);
                 // Called from the circuit breaker's recovery executor, not from the zookeeper pool,
                 // so start() can run inline without risking a deadlock.
-                BackgroundJobServer.this.start();
+                try {
+                    BackgroundJobServer.this.start();
+                } catch (Exception e) {
+                    // why: if the restart fails, nothing else will ever restart this server. Reopening the circuit
+                    // breaker schedules a new recovery attempt after the cooldown period.
+                    LOGGER.error("{} could not be restarted - a new attempt is scheduled", BackgroundJobServer.this, e);
+                    circuitBreaker.trip();
+                }
             }
         }
 
